@@ -1,8 +1,3 @@
-"""
-Point d'entrée principal du pipeline OCR-VECTOR-DOC.
-Extrait, nettoie, chunke et vectorise des PDFs.
-"""
-
 import os
 from pathlib import Path
 from dotenv import load_dotenv
@@ -28,7 +23,6 @@ CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "200"))
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
 EMBEDDING_BATCH_SIZE = int(os.getenv("EMBEDDING_BATCH_SIZE", "100"))
 
-# Gestionnaire d'états
 state_manager = StateManager(CACHE_DIR)
 
 
