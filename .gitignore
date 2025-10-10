@@ -1,0 +1,27 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+venv
+
+# Environment variables
+.env
+
+# Output directories
+OUTPUT/
+
+# Cache directories
+.cache/
+
+# Data (optional - uncomment if you don't want to commit PDFs)
+DATA/
+
+COMPARISON/
+
+.claude
