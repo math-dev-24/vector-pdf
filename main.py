@@ -4,7 +4,11 @@ from dotenv import load_dotenv
 
 from src.pdf_analyzer import analyze_pdfs
 from src.extractors import extract_text_from_pdf, extract_text_from_scan
-from src.extractors.text_extractor_v2 import extract_structured_text_from_pdf, extract_with_pymupdf4llm
+from src.extractors.text_extractor_v2 import (
+    extract_structured_text_from_pdf,
+    extract_with_pymupdf4llm,
+    process_multiple_pdfs
+)
 from src.processors import chunk_all_markdown_files, StateManager
 from src.vectorization.embeddings import embed_all_files
 from src.vectorization.vector_store import store_embeddings
@@ -26,7 +30,7 @@ EMBEDDING_BATCH_SIZE = int(os.getenv("EMBEDDING_BATCH_SIZE", "100"))
 state_manager = StateManager(CACHE_DIR)
 
 
-def run_extraction(data_dir: str, output_dir: str, extraction_mode: str = "basic") -> None:
+def run_extraction(data_dir: str, output_dir: str, extraction_mode: str = "basic", pdf_filter: str = "all") -> None:
     """
     Étape 1: Extraction des PDFs (natifs et scans).
 
@@ -34,6 +38,7 @@ def run_extraction(data_dir: str, output_dir: str, extraction_mode: str = "basic
         data_dir: Répertoire contenant les PDFs
         output_dir: Répertoire de sortie pour les markdown
         extraction_mode: Mode d'extraction ("basic", "structured", "pymupdf4llm")
+        pdf_filter: Filtrer les PDFs à traiter ("all", "text", "scan")
     """
     print("=" * 60)
     print("ÉTAPE 1: EXTRACTION DES PDFS")
@@ -50,8 +55,22 @@ def run_extraction(data_dir: str, output_dir: str, extraction_mode: str = "basic
     print(f"Nombre total de PDFs analysés: {len(pdf_infos)}\n")
 
     # Séparer scans et textes natifs
-    text_pdfs = [p for p in pdf_infos if p['page_type'] == 'text']
-    scan_pdfs = [p for p in pdf_infos if p['page_type'] == 'scan']
+    all_text_pdfs = [p for p in pdf_infos if p['page_type'] == 'text']
+    all_scan_pdfs = [p for p in pdf_infos if p['page_type'] == 'scan']
+
+    # Appliquer le filtre
+    if pdf_filter == "text":
+        text_pdfs = all_text_pdfs
+        scan_pdfs = []
+        print(f"🎯 Filtre: Uniquement les PDFs avec texte natif ({len(text_pdfs)} PDF(s))\n")
+    elif pdf_filter == "scan":
+        text_pdfs = []
+        scan_pdfs = all_scan_pdfs
+        print(f"🎯 Filtre: Uniquement les PDFs scannés ({len(scan_pdfs)} PDF(s))\n")
+    else:  # "all"
+        text_pdfs = all_text_pdfs
+        scan_pdfs = all_scan_pdfs
+        print(f"🎯 Filtre: Tous les PDFs ({len(text_pdfs)} texte, {len(scan_pdfs)} scan)\n")
 
     # Afficher les infos
     for i, pdf in enumerate(pdf_infos, start=1):
@@ -68,24 +87,38 @@ def run_extraction(data_dir: str, output_dir: str, extraction_mode: str = "basic
 
         print(f"\n=== Extraction des PDFs natifs ===")
         print(f"📑 {len(text_pdfs)} PDF(s) natif(s) à traiter")
-        print(f"📋 Mode: {mode_display.get(extraction_mode, extraction_mode)}\n")
+        print(f"📋 Mode: {mode_display.get(extraction_mode, extraction_mode)}")
 
-        for i, pdf in enumerate(text_pdfs, start=1):
-            print(f"[{i}/{len(text_pdfs)}] {pdf['path']}")
+        # Choisir la fonction d'extraction
+        extraction_func_map = {
+            "structured": extract_structured_text_from_pdf,
+            "pymupdf4llm": extract_with_pymupdf4llm,
+            "basic": extract_text_from_pdf
+        }
+        extraction_func = extraction_func_map.get(extraction_mode, extract_structured_text_from_pdf)
 
+        # Extraction séquentielle pour éviter les crashs avec PDFs images
+        # Le multi-threading est désactivé par défaut pour stabilité
+        if len(text_pdfs) > 1:
+            pdf_paths = [pdf['path'] for pdf in text_pdfs]
+            output_files = process_multiple_pdfs(
+                pdf_paths=pdf_paths,
+                output_dir=output_dir,
+                extraction_func=extraction_func,
+                verbose=True,
+                use_multithreading=False  # Désactivé pour éviter crashs avec PDFs images
+            )
+        else:
+            # Un seul PDF : extraction séquentielle avec logs détaillés
+            pdf = text_pdfs[0]
+            print(f"\n[1/1] {pdf['path']}")
             try:
-                if extraction_mode == "structured":
-                    output_path = extract_structured_text_from_pdf(pdf['path'], output_dir, verbose=True)
-                elif extraction_mode == "pymupdf4llm":
-                    output_path = extract_with_pymupdf4llm(pdf['path'], output_dir, verbose=True)
-                else:  # basic
-                    output_path = extract_text_from_pdf(pdf['path'], output_dir, verbose=True)
-
+                output_path = extraction_func(pdf['path'], output_dir, verbose=True)
                 print(f"  → Fichier créé: {output_path}\n")
             except Exception as e:
                 print(f"  ❌ Erreur: {e}\n")
 
-        print(f"✅ Extraction terminée: {len(text_pdfs)} fichier(s) créé(s)\n")
+        print(f"\n✅ Extraction terminée\n")
 
     # Extraire les scans
     if scan_pdfs:
@@ -210,13 +243,23 @@ def process_pdf_to_md():
     print("📄 TRAITEMENT PDF TO MD")
     print("=" * 60)
 
+    # Demander le type de PDFs à traiter
+    print("\n💡 Type de PDFs à traiter:")
+    print("  1. Tous (texte natif + scans)")
+    print("  2. Uniquement texte natif")
+    print("  3. Uniquement scans")
+
+    choice = input("\nVotre choix (1/2/3, défaut=1): ").strip()
+    pdf_filters = {"1": "all", "2": "text", "3": "scan"}
+    pdf_filter = pdf_filters.get(choice, "all")
+
     # Demander le mode d'extraction
     print("\n💡 Choisissez le mode d'extraction:")
     print("  1. Basique (rapide, sans structure)")
     print("  2. Structurée (détection automatique des titres)")
     print("  3. PyMuPDF4LLM (optimal pour LLM, nécessite pymupdf4llm)")
 
-    choice = input("\nVotre choix (1/2/3): ").strip()
+    choice = input("\nVotre choix (1/2/3, défaut=2): ").strip()
 
     extraction_modes = {
         "1": "basic",
@@ -227,7 +270,7 @@ def process_pdf_to_md():
     extraction_mode = extraction_modes.get(choice, "structured")  # Par défaut: structured
 
     Path(OUTPUT_DIR).mkdir(exist_ok=True)
-    run_extraction(DATA_DIR, OUTPUT_DIR, extraction_mode)
+    run_extraction(DATA_DIR, OUTPUT_DIR, extraction_mode, pdf_filter)
 
     print("\n✅ Extraction terminée!")
 
@@ -385,6 +428,16 @@ def run_full_pipeline():
     # Demander le namespace
     namespace = input("\nNamespace Pinecone (laisser vide pour default): ").strip()
 
+    # Demander le type de PDFs à traiter
+    print("\n💡 Type de PDFs à traiter:")
+    print("  1. Tous (texte natif + scans)")
+    print("  2. Uniquement texte natif")
+    print("  3. Uniquement scans")
+
+    choice = input("\nVotre choix (1/2/3, défaut=1): ").strip()
+    pdf_filters = {"1": "all", "2": "text", "3": "scan"}
+    pdf_filter = pdf_filters.get(choice, "all")
+
     # Demander le mode d'extraction
     print("\n💡 Choisissez le mode d'extraction:")
     print("  1. Basique")
@@ -395,11 +448,27 @@ def run_full_pipeline():
     extraction_modes = {"1": "basic", "2": "structured", "3": "pymupdf4llm"}
     extraction_mode = extraction_modes.get(choice, "structured")
 
+    # Demander si on veut reset la base de données
+    print("\n💡 Options de la base de données vectorielle:")
+    print("  1. Ajouter aux vecteurs existants")
+    print("  2. Réinitialiser le namespace avant l'ajout")
+
+    choice = input("\nVotre choix (1/2, défaut=1): ").strip()
+    reset = (choice == "2")
+
+    if reset:
+        ns_display = f"'{namespace}'" if namespace else "(default)"
+        print(f"\n⚠️  Le namespace {ns_display} sera réinitialisé avant l'ajout!")
+        confirm = input("Êtes-vous sûr? (oui/non): ").strip().lower()
+        if confirm != "oui":
+            print("Opération annulée.")
+            return
+
     # Créer les répertoires
     Path(OUTPUT_DIR).mkdir(exist_ok=True)
 
     # Étape 1: Extraction
-    run_extraction(DATA_DIR, OUTPUT_DIR, extraction_mode)
+    run_extraction(DATA_DIR, OUTPUT_DIR, extraction_mode, pdf_filter)
 
     # Étape 2: Chunking
     results = run_chunking(OUTPUT_DIR, CHUNK_SIZE, CHUNK_OVERLAP)
@@ -428,7 +497,7 @@ def run_full_pipeline():
         index_name=PINECONE_INDEX_NAME,
         dimension=PINECONE_DIMENSION,
         namespace=namespace,
-        reset=False
+        reset=reset
     )
 
     # Résumé final

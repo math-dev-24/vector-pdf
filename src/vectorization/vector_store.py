@@ -4,8 +4,34 @@ Module pour stocker et gérer les embeddings dans Pinecone.
 
 import os
 import time
+import unicodedata
+import re
 from typing import List, Dict, Optional
 from pinecone import Pinecone, ServerlessSpec
+
+
+def sanitize_vector_id(text: str) -> str:
+    """
+    Nettoie un texte pour l'utiliser comme ID Pinecone (ASCII uniquement).
+
+    Args:
+        text: Texte à nettoyer
+
+    Returns:
+        Texte nettoyé en ASCII
+    """
+    # Normaliser les caractères unicode (décomposer les accents)
+    text = unicodedata.normalize('NFKD', text)
+    # Encoder en ASCII en ignorant les caractères non-ASCII
+    text = text.encode('ascii', 'ignore').decode('ascii')
+    # Remplacer les espaces et caractères spéciaux par des underscores
+    text = re.sub(r'[^a-zA-Z0-9_\-.]', '_', text)
+    # Éviter les underscores multiples
+    text = re.sub(r'_+', '_', text)
+    # Enlever les underscores au début et à la fin
+    text = text.strip('_')
+
+    return text
 
 
 class VectorStore:
@@ -88,12 +114,14 @@ class VectorStore:
 
         for i, chunk in enumerate(chunks):
             # ID unique basé sur le fichier et l'index
-            vector_id = f"{chunk['metadata']['file_name']}_chunk_{chunk['metadata']['chunk_index']}"
+            # Nettoyer le nom de fichier pour ne garder que des caractères ASCII
+            clean_filename = sanitize_vector_id(chunk['metadata']['file_name'])
+            vector_id = f"{clean_filename}_chunk_{chunk['metadata']['chunk_index']}"
 
             # Métadonnées (Pinecone accepte strings, numbers, booleans, lists)
             metadata = {
                 'source': chunk['metadata']['source'],
-                'file_name': chunk['metadata']['file_name'],
+                'file_name': chunk['metadata']['file_name'],  # Garder le nom original dans les métadonnées
                 'chunk_index': chunk['metadata']['chunk_index'],
                 'total_chunks': chunk['metadata']['total_chunks'],
                 'chunk_size': chunk['metadata']['chunk_size'],

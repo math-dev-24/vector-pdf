@@ -1,11 +1,15 @@
 """
 Extracteur PDF amélioré avec détection de structure et titres.
 Utilise PyMuPDF pour analyser les tailles de police et détecter la hiérarchie.
+Supporte le multithreading pour améliorer les performances.
 """
 
 import fitz  # PyMuPDF
 from pathlib import Path
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import List, Dict, Callable
+import os
 from src.processors.text_cleaner import clean_text
 
 
@@ -38,13 +42,14 @@ def analyze_font_sizes(doc: fitz.Document) -> dict:
 def determine_heading_levels(font_stats: dict, body_size: float = None) -> dict:
     """
     Détermine les niveaux de titres en fonction des tailles de police.
+    Améliore la détection en utilisant plusieurs critères.
 
     Args:
         font_stats: Statistiques des tailles de police
         body_size: Taille de police du corps de texte (auto-détectée si None)
 
     Returns:
-        Mapping taille -> niveau markdown (# ## ###)
+        Mapping taille -> niveau markdown (# ## ### ####)
     """
     if not font_stats:
         return {}
@@ -53,22 +58,37 @@ def determine_heading_levels(font_stats: dict, body_size: float = None) -> dict:
     sizes_by_freq = sorted(font_stats.items(), key=lambda x: x[1], reverse=True)
 
     # La taille la plus fréquente est généralement le corps de texte
+    # Mais vérifier si c'est raisonnable (pas trop petit)
     if body_size is None:
         body_size = sizes_by_freq[0][0]
 
-    # Créer le mapping
+        # Si la taille la plus fréquente est très petite, chercher une meilleure candidate
+        if body_size < 8:
+            for size, freq in sizes_by_freq:
+                if size >= 10:
+                    body_size = size
+                    break
+
+    # Obtenir toutes les tailles triées par ordre décroissant
+    all_sizes = sorted(font_stats.keys(), reverse=True)
+
+    # Séparer les tailles en catégories plus finement
     level_map = {}
 
-    for size, _ in font_stats.items():
-        if size > body_size * 1.8:  # Très grand
+    for size in all_sizes:
+        ratio = size / body_size
+
+        if ratio >= 2.0:  # Titre principal (H1)
             level_map[size] = "#"
-        elif size > body_size * 1.4:  # Grand
+        elif ratio >= 1.6:  # Sous-titre important (H2)
             level_map[size] = "##"
-        elif size > body_size * 1.1:  # Moyen
+        elif ratio >= 1.3:  # Sous-titre moyen (H3)
             level_map[size] = "###"
-        elif size >= body_size * 0.95:  # Corps de texte
+        elif ratio >= 1.15:  # Sous-titre petit (H4)
+            level_map[size] = "####"
+        elif ratio >= 0.9:  # Corps de texte
             level_map[size] = ""
-        else:  # Petit (notes de bas de page, etc.)
+        else:  # Petit texte (notes de bas de page, etc.)
             level_map[size] = ""
 
     return level_map
@@ -245,6 +265,73 @@ def extract_with_pymupdf4llm(
         print(f"  ✅ Sauvegardé: {len(cleaned_content)} caractères, {title_count} titre(s)")
 
     return str(output_file)
+
+
+def process_multiple_pdfs(
+    pdf_paths: List[str],
+    output_dir: str = "./OUTPUT",
+    extraction_func: Callable = extract_structured_text_from_pdf,
+    verbose: bool = True,
+    max_workers: int = 1,
+    use_multithreading: bool = False
+) -> List[str]:
+    """
+    Traite plusieurs PDFs en parallèle avec multithreading (optionnel).
+
+    Args:
+        pdf_paths: Liste des chemins vers les PDFs
+        output_dir: Répertoire de sortie
+        extraction_func: Fonction d'extraction à utiliser
+        verbose: Afficher les logs
+        max_workers: Nombre maximum de threads (ignoré si use_multithreading=False)
+        use_multithreading: Activer le traitement parallèle (False par défaut pour stabilité)
+                            ATTENTION: peut causer des crashs avec PDFs contenant des images/scans
+
+    Returns:
+        Liste des chemins des fichiers markdown créés
+    """
+    # Désactiver le multithreading par défaut pour éviter les crashs avec PDFs images
+    if not use_multithreading:
+        max_workers = 1
+    elif max_workers is None or max_workers < 1:
+        # Utiliser le nombre optimal de threads (CPU count + 4 pour I/O bound tasks)
+        max_workers = min(32, (os.cpu_count() or 1) + 4)
+
+    if verbose:
+        print(f"\n🚀 Traitement parallèle de {len(pdf_paths)} PDF(s)...")
+        print(f"   Threads: {max_workers}")
+
+    output_files = []
+    errors = []
+
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # Soumettre tous les jobs
+        future_to_pdf = {
+            executor.submit(extraction_func, pdf_path, output_dir, False): pdf_path
+            for pdf_path in pdf_paths
+        }
+
+        # Traiter les résultats au fur et à mesure
+        for i, future in enumerate(as_completed(future_to_pdf), 1):
+            pdf_path = future_to_pdf[future]
+
+            try:
+                output_file = future.result()
+                output_files.append(output_file)
+
+                if verbose:
+                    print(f"  [{i}/{len(pdf_paths)}] ✅ {Path(pdf_path).name}")
+            except Exception as e:
+                errors.append((pdf_path, str(e)))
+                if verbose:
+                    print(f"  [{i}/{len(pdf_paths)}] ❌ {Path(pdf_path).name}: {e}")
+
+    if verbose:
+        print(f"\n✅ Traitement terminé: {len(output_files)}/{len(pdf_paths)} réussi(s)")
+        if errors:
+            print(f"   ⚠️  {len(errors)} erreur(s) rencontrée(s)")
+
+    return output_files
 
 
 if __name__ == "__main__":

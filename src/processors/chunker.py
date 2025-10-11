@@ -1,11 +1,13 @@
 """
 Module pour découper les fichiers markdown en chunks optimisés pour la vectorisation.
 Utilise LangChain pour un chunking intelligent qui respecte la structure du document.
+Supporte le multithreading pour améliorer les performances.
 """
 
 import os
 from pathlib import Path
 from typing import List, Dict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
@@ -94,16 +96,19 @@ def chunk_all_markdown_files(
     directory: str = "./OUTPUT",
     chunk_size: int = 1000,
     chunk_overlap: int = 200,
-    verbose: bool = True
+    verbose: bool = True,
+    max_workers: int = None
 ) -> List[Dict]:
     """
     Découpe tous les fichiers markdown d'un répertoire en chunks.
+    Utilise le multithreading pour améliorer les performances.
 
     Args:
         directory: Répertoire contenant les fichiers markdown
         chunk_size: Taille maximale d'un chunk
         chunk_overlap: Overlap entre chunks
         verbose: Afficher les logs de progression
+        max_workers: Nombre maximum de threads (None = auto)
 
     Returns:
         Liste de dictionnaires avec les informations de chunking
@@ -121,15 +126,46 @@ def chunk_all_markdown_files(
         print(f"Aucun fichier .md trouvé dans {directory}")
         return []
 
+    if max_workers is None:
+        # Optimal pour I/O bound tasks
+        max_workers = min(32, (os.cpu_count() or 1) + 4)
+
     if verbose:
         print(f"\n📝 Chunking de {len(md_files)} fichier(s) markdown...")
-        print(f"   Paramètres: chunk_size={chunk_size}, overlap={chunk_overlap}\n")
+        print(f"   Paramètres: chunk_size={chunk_size}, overlap={chunk_overlap}")
+        if len(md_files) > 1:
+            print(f"   Threads: {max_workers}")
+        print()
 
     results = []
 
-    for i, md_file in enumerate(md_files, start=1):
+    # Traitement parallèle si plusieurs fichiers
+    if len(md_files) > 1:
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Soumettre tous les jobs
+            future_to_file = {
+                executor.submit(chunk_markdown_file, str(md_file), chunk_size, chunk_overlap): md_file
+                for md_file in md_files
+            }
+
+            # Traiter les résultats au fur et à mesure
+            for i, future in enumerate(as_completed(future_to_file), 1):
+                md_file = future_to_file[future]
+
+                try:
+                    result = future.result()
+                    results.append(result)
+
+                    if verbose:
+                        print(f"  [{i}/{len(md_files)}] ✅ {md_file.name}: {result['num_chunks']} chunks")
+                except Exception as e:
+                    if verbose:
+                        print(f"  [{i}/{len(md_files)}] ❌ {md_file.name}: {e}")
+    else:
+        # Un seul fichier : traitement séquentiel
+        md_file = md_files[0]
         if verbose:
-            print(f"  [{i}/{len(md_files)}] Traitement de {md_file.name}...")
+            print(f"  [1/1] Traitement de {md_file.name}...")
 
         result = chunk_markdown_file(str(md_file), chunk_size, chunk_overlap)
         results.append(result)

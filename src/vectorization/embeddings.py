@@ -1,11 +1,13 @@
 """
 Module pour créer des embeddings avec OpenAI.
+Supporte le traitement par batch et le multithreading pour de meilleures performances.
 """
 
 import os
 from typing import List, Dict
 from openai import OpenAI
 from dotenv import load_dotenv
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # Charger les variables d'environnement
 load_dotenv()
@@ -51,16 +53,19 @@ def embed_chunks(
     chunks_data: List[Dict],
     model: str = "text-embedding-3-small",
     batch_size: int = 100,
-    verbose: bool = True
+    verbose: bool = True,
+    max_workers: int = 4
 ) -> List[Dict]:
     """
     Crée des embeddings pour des chunks avec leurs métadonnées.
+    Utilise le multithreading pour traiter plusieurs batchs en parallèle.
 
     Args:
         chunks_data: Liste de dictionnaires avec 'content' et 'metadata'
         model: Modèle d'embedding OpenAI
-        batch_size: Taille des batchs
+        batch_size: Taille des batchs pour l'API
         verbose: Afficher la progression
+        max_workers: Nombre maximum de threads (défaut: 4 pour respecter les limites de l'API)
 
     Returns:
         Liste de dictionnaires avec embeddings ajoutés
@@ -68,20 +73,43 @@ def embed_chunks(
     # Extraire les textes
     texts = [chunk['content'] for chunk in chunks_data]
 
-    # Créer les embeddings avec logs par batch
-    embeddings = []
+    # Créer les batches
     num_batches = (len(texts) - 1) // batch_size + 1
-
+    batches = []
     for batch_num in range(num_batches):
         start_idx = batch_num * batch_size
         end_idx = min((batch_num + 1) * batch_size, len(texts))
-        batch_texts = texts[start_idx:end_idx]
+        batches.append((batch_num, texts[start_idx:end_idx]))
 
-        if verbose:
-            print(f"     Batch {batch_num + 1}/{num_batches}: vectorisation de {len(batch_texts)} chunks...")
+    # Traiter les batches en parallèle
+    embeddings_by_batch = {}
 
-        batch_embeddings = create_embeddings(batch_texts, model=model, batch_size=batch_size)
-        embeddings.extend(batch_embeddings)
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # Soumettre tous les jobs
+        future_to_batch = {
+            executor.submit(create_embeddings, batch_texts, model, batch_size): batch_num
+            for batch_num, batch_texts in batches
+        }
+
+        # Traiter les résultats au fur et à mesure
+        for future in as_completed(future_to_batch):
+            batch_num = future_to_batch[future]
+
+            try:
+                batch_embeddings = future.result()
+                embeddings_by_batch[batch_num] = batch_embeddings
+
+                if verbose:
+                    print(f"     Batch {batch_num + 1}/{num_batches}: ✅ {len(batch_embeddings)} embeddings créés")
+            except Exception as e:
+                if verbose:
+                    print(f"     Batch {batch_num + 1}/{num_batches}: ❌ Erreur: {e}")
+                raise
+
+    # Reconstituer les embeddings dans l'ordre
+    embeddings = []
+    for batch_num in range(num_batches):
+        embeddings.extend(embeddings_by_batch[batch_num])
 
     # Ajouter les embeddings aux chunks
     enriched_chunks = []
