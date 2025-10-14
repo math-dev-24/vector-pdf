@@ -5,13 +5,13 @@ Pipeline complet pour extraire, chunker et vectoriser des documents PDF dans Pin
 ## Fonctionnalités
 
 - **Extraction PDF intelligente** : 3 modes (basique, structuré, PyMuPDF4LLM)
-- **D�tection automatique de titres** : Préserve la structure pour un meilleur chunking
+- **Détection automatique de titres** : Préserve la structure pour un meilleur chunking
 - **OCR pour scans** : Support des PDFs scannés avec Tesseract
-- **Chunking optimis�** : LangChain RecursiveCharacterTextSplitter
+- **Chunking optimisé** : LangChain RecursiveCharacterTextSplitter
 - **Vectorisation OpenAI** : Embeddings avec text-embedding-3-small
-- **Stockage Pinecone** : Support des namespaces pour organiser vos donn�es
-- **Cache intelligent** : R�utilise les embeddings pour �conomiser les co�ts API
-- **Menu interactif** : Workflow modulaire (extraction, vectorisation, stockage s�par�s)
+- **Stockage Pinecone** : Support des namespaces pour organiser vos données
+- **Cache intelligent** : Réutilise les embeddings pour économiser les coûts API
+- **Menu interactif** : Workflow modulaire (extraction, vectorisation, stockage séparés)
 
 ## Installation
 
