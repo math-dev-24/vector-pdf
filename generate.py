@@ -9,7 +9,7 @@ from src.extractors.text_extractor_v2 import (
     extract_with_pymupdf4llm,
     process_multiple_pdfs
 )
-from src.processors import chunk_all_markdown_files, StateManager
+from src.processors import chunk_all_markdown_files, process_all_markdown_files, StateManager
 from src.vectorization.embeddings import embed_all_files
 from src.vectorization.vector_store import store_embeddings
 
@@ -133,7 +133,7 @@ def run_extraction(data_dir: str, output_dir: str, extraction_mode: str = "basic
         print(f"✅ Extraction OCR terminée: {len(scan_pdfs)} fichier(s) créé(s)\n")
 
 
-def run_chunking(output_dir: str, chunk_size: int, chunk_overlap: int):
+def run_chunking(output_dir: str, chunk_size: int, chunk_overlap: int, use_advanced: bool = False):
     """
     Étape 2: Chunking des fichiers markdown.
 
@@ -141,6 +141,7 @@ def run_chunking(output_dir: str, chunk_size: int, chunk_overlap: int):
         output_dir: Répertoire contenant les markdowns
         chunk_size: Taille des chunks
         chunk_overlap: Overlap entre chunks
+        use_advanced: Utiliser le chunking avancé avec enrichissement IA
 
     Returns:
         Résultats du chunking
@@ -149,12 +150,27 @@ def run_chunking(output_dir: str, chunk_size: int, chunk_overlap: int):
     print("ÉTAPE 2: CHUNKING DES DOCUMENTS")
     print("=" * 60)
 
-    results = chunk_all_markdown_files(
-        directory=output_dir,
-        chunk_size=chunk_size,
-        chunk_overlap=chunk_overlap,
-        verbose=True
-    )
+    if use_advanced:
+        print("\n🚀 Mode: CHUNKING AVANCÉ (avec enrichissement IA)")
+        results = process_all_markdown_files(
+            directory=output_dir,
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            use_adaptive_chunking=True,
+            use_semantic_chunking=False,
+            enable_ai_enrichment=True,
+            enable_context_augmentation=True,
+            augmentation_strategy="with_context",
+            verbose=True
+        )
+    else:
+        print("\n📝 Mode: CHUNKING STANDARD")
+        results = chunk_all_markdown_files(
+            directory=output_dir,
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            verbose=True
+        )
 
     return results
 
@@ -304,7 +320,15 @@ def process_vectorization():
 
     # Sinon, faire le chunking
     if not results:
-        results = run_chunking(OUTPUT_DIR, CHUNK_SIZE, CHUNK_OVERLAP)
+        # Demander le mode de chunking
+        print("\n💡 Mode de chunking:")
+        print("  1. Standard (rapide, pas d'IA)")
+        print("  2. Avancé (enrichissement IA + contexte)")
+
+        choice = input("\nVotre choix (1/2, défaut=2): ").strip()
+        use_advanced = (choice != "1")
+
+        results = run_chunking(OUTPUT_DIR, CHUNK_SIZE, CHUNK_OVERLAP, use_advanced=use_advanced)
 
         if not results:
             print("\n⚠️  Aucun document markdown trouvé. Lancez d'abord l'option 1.")
@@ -470,8 +494,16 @@ def run_full_pipeline():
     # Étape 1: Extraction
     run_extraction(DATA_DIR, OUTPUT_DIR, extraction_mode, pdf_filter)
 
+    # Demander le mode de chunking
+    print("\n💡 Mode de chunking:")
+    print("  1. Standard (rapide, pas d'IA)")
+    print("  2. Avancé (enrichissement IA + contexte)")
+
+    choice = input("\nVotre choix (1/2, défaut=2): ").strip()
+    use_advanced = (choice != "1")
+
     # Étape 2: Chunking
-    results = run_chunking(OUTPUT_DIR, CHUNK_SIZE, CHUNK_OVERLAP)
+    results = run_chunking(OUTPUT_DIR, CHUNK_SIZE, CHUNK_OVERLAP, use_advanced=use_advanced)
 
     if not results:
         print("\n⚠️  Aucun document à traiter. Arrêt du pipeline.")

@@ -237,6 +237,30 @@ def remove_ocr_artifacts(text: str) -> str:
     return '\n'.join(cleaned_lines)
 
 
+def fix_hyphenated_words(text: str) -> str:
+    """
+    Répare les mots coupés par des césures (trait d'union en fin de ligne).
+    Ex: "développe-\nment" → "développement"
+
+    Args:
+        text: Texte à réparer
+
+    Returns:
+        Texte avec césures corrigées
+    """
+    # Pattern: mot suivi de tiret puis retour à la ligne puis continuation
+    # Gérer les différents types de tirets: - (hyphen), ‐ (hyphen), ­ (soft hyphen)
+    pattern = r'(\w+)[-‐­]\s*\n\s*(\w+)'
+
+    def replacer(match):
+        # Fusionner les deux parties
+        return match.group(1) + match.group(2)
+
+    text = re.sub(pattern, replacer, text)
+
+    return text
+
+
 def normalize_whitespace(text: str, max_empty_lines: int = 1) -> str:
     """
     Normalise les espaces : supprime espaces multiples, lignes vides excessives.
@@ -626,7 +650,12 @@ def improve_markdown_structure(text: str) -> str:
     return '\n'.join(merged_lines)
 
 
-def clean_text(text: str, is_ocr: bool = False, remove_repetitive: bool = True, clean_emojis: bool = True) -> str:
+def clean_text(
+        text: str,
+        is_ocr: bool = False,
+        remove_repetitive: bool = True,
+        clean_emojis: bool = True
+) -> str:
     """
     Applique tous les nettoyages sur le texte.
 
@@ -639,6 +668,9 @@ def clean_text(text: str, is_ocr: bool = False, remove_repetitive: bool = True, 
     Returns:
         Texte nettoyé
     """
+    # Réparer les césures AVANT tout autre traitement
+    text = fix_hyphenated_words(text)
+
     # Nettoyages de base
     text = remove_page_numbers(text)
     text = remove_figure_references(text)
