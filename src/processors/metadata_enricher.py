@@ -5,11 +5,13 @@ Utilise OpenAI pour extraire entités, mots-clés, résumés, etc.
 
 import os
 import re
+import json
 from typing import Dict, List
 from openai import OpenAI
-from dotenv import load_dotenv
 
-load_dotenv()
+from src.core import get_logger
+
+logger = get_logger(__name__)
 
 
 class MetadataEnricher:
@@ -27,9 +29,10 @@ class MetadataEnricher:
         self.model = model
 
         if use_ai:
-            api_key = os.getenv("OPENAI_API_KEY")
+            from src.core import settings
+            api_key = settings.openai_api_key or os.getenv("OPENAI_API_KEY")
             if not api_key:
-                print("⚠️  OPENAI_API_KEY non trouvée, enrichissement IA désactivé")
+                logger.warning("OPENAI_API_KEY non trouvée, enrichissement IA désactivé")
                 self.use_ai = False
             else:
                 self.client = OpenAI(api_key=api_key)
@@ -155,7 +158,7 @@ Limites: max 5 par catégorie. Si aucune info, retourne liste vide []."""
                 messages=[
                     {
                         "role": "system",
-                        "content": "Tu es un expert en extraction d'information. Réponds UNIQUEMENT avec du JSON valide, sans markdown ni texte explicatif."
+                        "content": "Tu es un expert en extraction d'information. Réponds UNIQUEMENT avec du JSON valide, sans markdown ni texte explicatif. Ne mets JAMAIS de virgule en fin de ligne avant } ou ]."
                     },
                     {
                         "role": "user",
@@ -163,7 +166,8 @@ Limites: max 5 par catégorie. Si aucune info, retourne liste vide []."""
                     }
                 ],
                 temperature=0.1,
-                max_tokens=500
+                max_tokens=500,
+                response_format={"type": "json_object"}  # Force JSON valide
             )
 
             content = response.choices[0].message.content.strip()
@@ -171,14 +175,34 @@ Limites: max 5 par catégorie. Si aucune info, retourne liste vide []."""
             # Nettoyer le markdown si présent
             content = re.sub(r'^```json\s*', '', content)
             content = re.sub(r'\s*```$', '', content)
+            content = re.sub(r'^```\s*', '', content)  # Aussi pour ``` sans json
 
-            import json
-            metadata = json.loads(content)
+            # Nettoyer les virgules en fin de ligne (trailing commas)
+            # Remplacer les virgules suivies d'un saut de ligne et d'un } ou ]
+            content = re.sub(r',\s*\n\s*([}\]])', r'\1', content)
+            # Remplacer les virgules juste avant } ou ]
+            content = re.sub(r',\s*([}\]])', r'\1', content)
+
+            try:
+                metadata = json.loads(content)
+            except json.JSONDecodeError as json_err:
+                # Tentative de réparation supplémentaire
+                # Supprimer les commentaires JSON (non standard mais parfois présents)
+                content = re.sub(r'//.*?$', '', content, flags=re.MULTILINE)
+                content = re.sub(r'/\*.*?\*/', '', content, flags=re.DOTALL)
+                
+                try:
+                    metadata = json.loads(content)
+                except json.JSONDecodeError:
+                    # Si ça échoue encore, essayer d'extraire juste les parties valides
+                    logger.warning(f"Erreur parsing JSON après nettoyage: {json_err}")
+                    logger.debug(f"Contenu problématique: {content[:200]}...")
+                    return {}
 
             return metadata
 
         except Exception as e:
-            print(f"⚠️  Erreur extraction IA: {e}")
+            logger.warning(f"Erreur extraction IA: {e}")
             return {}
 
     def detect_content_features(self, text: str) -> Dict[str, bool]:

@@ -18,6 +18,10 @@ from .chunking_strategies import (
     ContentTypeDetector,
     SentenceWindowChunker
 )
+from .token_based_chunker import TokenBasedChunker
+from .chunk_quality_filter import ChunkQualityFilter
+from .chunk_merger import ChunkMerger
+from .chunk_prioritizer import ChunkPrioritizer
 
 __all__ = [
     # Base
@@ -38,5 +42,10 @@ __all__ = [
     'AdaptiveChunker',
     'SemanticChunker',
     'ContentTypeDetector',
-    'SentenceWindowChunker'
+    'SentenceWindowChunker',
+    # Optimisations
+    'TokenBasedChunker',
+    'ChunkQualityFilter',
+    'ChunkMerger',
+    'ChunkPrioritizer'
 ]

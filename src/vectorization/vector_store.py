@@ -9,6 +9,10 @@ import re
 from typing import List, Dict, Optional
 from pinecone import Pinecone, ServerlessSpec
 
+from src.core import settings, get_logger, ConfigurationError
+
+logger = get_logger(__name__)
+
 
 def sanitize_vector_id(text: str) -> str:
     """
@@ -56,11 +60,15 @@ class VectorStore:
         self.metric = metric
 
         # Initialiser le client Pinecone
-        api_key = os.getenv("PINECONE_API_KEY")
+        api_key = settings.pinecone_api_key or os.getenv("PINECONE_API_KEY")
         if not api_key:
-            raise ValueError("PINECONE_API_KEY non définie dans .env")
+            raise ConfigurationError(
+                "PINECONE_API_KEY non définie. "
+                "Définissez-la dans .env ou via la variable d'environnement."
+            )
 
         self.pc = Pinecone(api_key=api_key)
+        logger.debug("Client Pinecone initialisé")
 
         # Créer ou récupérer l'index
         self._initialize_index()
@@ -93,26 +101,54 @@ class VectorStore:
         # Connecter à l'index
         self.index = self.pc.Index(self.index_name)
 
-    def add_chunks(self, chunks: List[Dict], batch_size: int = 100, namespace: str = "", verbose: bool = True) -> None:
+    def add_chunks(
+        self, 
+        chunks: List[Dict], 
+        batch_size: int = 100, 
+        namespace: str = "", 
+        verbose: bool = True,
+        embedding_version: Optional[str] = None
+    ) -> None:
         """
         Ajoute des chunks avec leurs embeddings à Pinecone.
+        Valide les dimensions avant l'upload.
 
         Args:
             chunks: Liste de dicts avec 'content', 'metadata', 'embedding'
             batch_size: Taille des batchs pour l'upload
             namespace: Namespace Pinecone (optionnel, "" = default)
             verbose: Afficher la progression
+            embedding_version: Version des embeddings (optionnel)
         """
         if verbose:
             print(f"\n=== Ajout dans Pinecone ===")
             print(f"Index: {self.index_name}")
+            print(f"Dimension attendue: {self.dimension}")
             print(f"Namespace: {namespace if namespace else '(default)'}")
             print(f"Nombre de chunks: {len(chunks)}\n")
 
         # Préparer les données pour Pinecone
         vectors = []
+        validation_errors = []
 
         for i, chunk in enumerate(chunks):
+            embedding = chunk.get('embedding')
+            
+            # Validation de l'embedding
+            if not embedding:
+                validation_errors.append(f"Chunk {i}: embedding manquant")
+                continue
+                
+            if not isinstance(embedding, list):
+                validation_errors.append(f"Chunk {i}: embedding n'est pas une liste")
+                continue
+                
+            if len(embedding) != self.dimension:
+                validation_errors.append(
+                    f"Chunk {i}: dimension {len(embedding)} != {self.dimension}"
+                )
+                continue
+
             # ID unique basé sur le fichier et l'index
             # Nettoyer le nom de fichier pour ne garder que des caractères ASCII
             clean_filename = sanitize_vector_id(chunk['metadata']['file_name'])
@@ -125,14 +161,34 @@ class VectorStore:
                 'chunk_index': chunk['metadata']['chunk_index'],
                 'total_chunks': chunk['metadata']['total_chunks'],
                 'chunk_size': chunk['metadata']['chunk_size'],
-                'text': chunk['content'][:1000]  # Limiter à 1000 chars pour les métadonnées
+                'text': chunk['content'][:1000],  # Limiter à 1000 chars pour les métadonnées
+                'embedding_dimension': len(embedding)  # Ajouter la dimension dans les métadonnées
             }
+            
+            # Ajouter la version si fournie
+            if embedding_version:
+                metadata['embedding_version'] = embedding_version
 
             vectors.append({
                 'id': vector_id,
-                'values': chunk['embedding'],
+                'values': embedding,
                 'metadata': metadata
             })
+
+        # Afficher les erreurs de validation
+        if validation_errors:
+            logger.error(f"{len(validation_errors)} erreur(s) de validation:")
+            for error in validation_errors[:10]:  # Limiter l'affichage
+                logger.error(f"  - {error}")
+            if len(validation_errors) > 10:
+                logger.error(f"  ... et {len(validation_errors) - 10} autres")
+            
+            if len(validation_errors) == len(chunks):
+                from src.core import PipelineError, ErrorType
+                raise PipelineError(
+                    ErrorType.EMBEDDING,
+                    "Tous les embeddings sont invalides"
+                )
 
         # Upload par batchs
         for i in range(0, len(vectors), batch_size):
@@ -246,7 +302,8 @@ def store_embeddings(
     dimension: int = 1536,
     namespace: str = "",
     reset: bool = False,
-    batch_size: int = 100
+    batch_size: int = 100,
+    embedding_version: Optional[str] = None
 ) -> VectorStore:
     """
     Stocke tous les embeddings dans Pinecone.
@@ -258,6 +315,7 @@ def store_embeddings(
         namespace: Namespace Pinecone (optionnel, "" = default)
         reset: Supprimer tous les vecteurs du namespace avant l'ajout
         batch_size: Taille des batchs pour l'upload
+        embedding_version: Version des embeddings (optionnel)
 
     Returns:
         Instance du VectorStore
@@ -279,8 +337,13 @@ def store_embeddings(
     for result in enriched_results:
         all_chunks.extend(result['chunks'])
 
-    # Ajouter à Pinecone
-    vector_store.add_chunks(all_chunks, batch_size=batch_size, namespace=namespace)
+    # Ajouter à Pinecone avec versioning
+    vector_store.add_chunks(
+        all_chunks, 
+        batch_size=batch_size, 
+        namespace=namespace,
+        embedding_version=embedding_version
+    )
 
     # Afficher les stats
     stats = vector_store.get_stats()

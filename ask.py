@@ -1,16 +1,16 @@
-import os
-from dotenv import load_dotenv
-from openai import OpenAI
-
+from src.core import (
+    settings,
+    setup_logging,
+    get_logger,
+    OpenAIClient,
+    PipelineError,
+    ErrorType
+)
 from src.vectorization.vector_store import VectorStore
 
-# Charger la configuration
-load_dotenv()
-
-# Configuration
-PINECONE_INDEX_NAME = os.getenv("PINECONE_INDEX_NAME", "pdf-documents")
-PINECONE_DIMENSION = int(os.getenv("PINECONE_DIMENSION", "1536"))
-EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
+# Configuration du logging
+setup_logging(level=settings.log_level, log_file=settings.log_file)
+logger = get_logger(__name__)
 
 
 def query_vector_db(
@@ -34,31 +34,37 @@ def query_vector_db(
         Dictionnaire avec les résultats
     """
     if verbose:
-        print(f"\n🔍 Recherche en cours...")
-        print(f"   Question: \"{question}\"")
-        print(f"   Namespace: {namespace if namespace else '(default)'}")
-        print(f"   Top-K: {top_k}\n")
+        logger.info("Recherche en cours...")
+        logger.info(f"Question: \"{question}\"")
+        logger.info(f"Namespace: {namespace if namespace else '(default)'}")
+        logger.info(f"Top-K: {top_k}")
 
-    # Créer l'embedding de la question
-    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-    response = client.embeddings.create(
-        input=[question],
-        model=EMBEDDING_MODEL
-    )
-    query_embedding = response.data[0].embedding
+    try:
+        client = OpenAIClient().client
+        response = client.embeddings.create(
+            input=[question],
+            model=settings.embedding_model
+        )
+        query_embedding = response.data[0].embedding
 
-    if verbose:
-        print(f"✅ Embedding créé (dimension: {len(query_embedding)})\n")
+        if verbose:
+            logger.info(f"Embedding créé (dimension: {len(query_embedding)})")
 
-    # Interroger Pinecone
-    results = vector_store.query(
-        query_embedding=query_embedding,
-        top_k=top_k,
-        namespace=namespace,
-        include_metadata=True
-    )
+        # Interroger Pinecone
+        results = vector_store.query(
+            query_embedding=query_embedding,
+            top_k=top_k,
+            namespace=namespace,
+            include_metadata=True
+        )
 
-    return results
+        return results
+    except Exception as e:
+        raise PipelineError(
+            ErrorType.EMBEDDING,
+            f"Erreur lors de la création de l'embedding de la question: {e}",
+            original_error=e
+        )
 
 
 def display_results(results: dict, verbose: bool = True):
@@ -168,24 +174,23 @@ def display_stats(vector_store: VectorStore):
 def main():
     """Fonction principale interactive."""
     # Vérifier les clés API
-    if not os.getenv("OPENAI_API_KEY"):
-        print("\n❌ ERREUR: OPENAI_API_KEY non définie dans .env")
-        print("   Créez un fichier .env basé sur .env.example\n")
-        return
-
-    if not os.getenv("PINECONE_API_KEY"):
-        print("\n❌ ERREUR: PINECONE_API_KEY non définie dans .env")
-        print("   Créez un fichier .env basé sur .env.example\n")
+    is_valid, missing_keys = settings.validate_api_keys()
+    if not is_valid:
+        logger.error(f"Clés API manquantes: {', '.join(missing_keys)}")
+        print(f"\n❌ ERREUR: Clés API manquantes: {', '.join(missing_keys)}")
+        print("   Créez un fichier .env avec les clés nécessaires\n")
         return
 
     # Initialiser le VectorStore
+    logger.info("Connexion à Pinecone...")
     print("\n🔌 Connexion à Pinecone...")
     try:
         vector_store = VectorStore(
-            index_name=PINECONE_INDEX_NAME,
-            dimension=PINECONE_DIMENSION
+            index_name=settings.pinecone_index_name,
+            dimension=settings.pinecone_dimension
         )
     except Exception as e:
+        logger.error(f"Erreur lors de la connexion à Pinecone: {e}")
         print(f"\n❌ Erreur lors de la connexion: {e}\n")
         return
 
@@ -195,11 +200,13 @@ def main():
     # Afficher les stats au démarrage
     stats = vector_store.get_stats()
     if stats['total_vectors'] == 0:
+        logger.warning("La base de données est vide")
         print("\n⚠️  ATTENTION: La base de données est vide!")
         print("   Lancez d'abord 'generate.py' pour ajouter des documents.\n")
         return
 
-    print(f"\n✅ Connecté à l'index '{PINECONE_INDEX_NAME}'")
+    logger.info(f"Connecté à l'index '{settings.pinecone_index_name}' ({stats['total_vectors']} vecteurs)")
+    print(f"\n✅ Connecté à l'index '{settings.pinecone_index_name}'")
     print(f"   Total de vecteurs: {stats['total_vectors']}")
 
     # Menu interactif
