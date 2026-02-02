@@ -64,6 +64,7 @@ class ExtractionResult:
     text_pdfs_count: int = 0
     scan_pdfs_count: int = 0
     total_pages: int = 0
+    failed_extractions: List[Dict] = field(default_factory=list)  # [(path, error), ...]
 
 
 @dataclass

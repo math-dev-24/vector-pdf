@@ -89,7 +89,8 @@ class ExtractionService(IExtractionService):
         
         output_files = []
         total_pages = 0
-        
+        failed_extractions: List[Dict] = []
+
         # Extraire les PDFs natifs
         if text_pdfs:
             output_files.extend(self._extract_text_pdfs(
@@ -98,21 +99,26 @@ class ExtractionService(IExtractionService):
                 extraction_mode
             ))
             total_pages += sum(p['num_pages'] for p in text_pdfs)
-        
+
         # Extraire les scans
         if scan_pdfs:
-            scan_files = self._extract_scan_pdfs(scan_pdfs, output_dir)
+            scan_files, scan_failed = self._extract_scan_pdfs(scan_pdfs, output_dir)
             output_files.extend(scan_files)
-            total_pages += sum(p['num_pages'] for p in scan_pdfs)
-        
+            failed_extractions.extend(scan_failed)
+            failed_paths = {f["path"] for f in scan_failed}
+            total_pages += sum(p["num_pages"] for p in scan_pdfs if p["path"] not in failed_paths)
+
         if self.verbose:
             logger.info(f"Extraction terminée: {len(output_files)} fichiers créés")
-        
+            if failed_extractions:
+                logger.warning(f"{len(failed_extractions)} extraction(s) échouée(s)")
+
         return ExtractionResult(
             output_files=output_files,
             text_pdfs_count=len(text_pdfs),
             scan_pdfs_count=len(scan_pdfs),
-            total_pages=total_pages
+            total_pages=total_pages,
+            failed_extractions=failed_extractions
         )
     
     def _apply_filter(
@@ -166,19 +172,24 @@ class ExtractionService(IExtractionService):
         self,
         scan_pdfs: List[Dict],
         output_dir: Path
-    ) -> List[str]:
+    ) -> tuple[List[str], List[Dict]]:
         """
         Extrait les PDFs scannés (OCR).
         Utilise Mistral OCR si configuré, sinon Tesseract.
         Fallback automatique vers Tesseract si Mistral échoue.
+
+        Returns:
+            Tuple (output_files, failed_extractions)
         """
         output_files = []
+        failed_extractions: List[Dict] = []
         use_mistral = settings.use_mistral_ocr
         fallback_enabled = settings.mistral_ocr_fallback
-        
+
         for pdf in scan_pdfs:
             success = False
-            
+            last_error = None
+
             # Essayer Mistral OCR si configuré
             if use_mistral:
                 try:
@@ -193,14 +204,14 @@ class ExtractionService(IExtractionService):
                     output_files.append(output_path)
                     success = True
                 except Exception as e:
+                    last_error = str(e)
                     logger.warning(f"Erreur Mistral OCR pour {pdf['path']}: {e}")
                     if fallback_enabled:
                         if self.verbose:
                             logger.info(f"Fallback vers Tesseract pour {pdf['path']}")
                     else:
-                        # Pas de fallback, on continue avec l'erreur
                         logger.error(f"Erreur OCR (Mistral) pour {pdf['path']}: {e}")
-            
+
             # Utiliser Tesseract si Mistral n'est pas configuré ou si fallback activé
             if not success:
                 try:
@@ -214,12 +225,14 @@ class ExtractionService(IExtractionService):
                     output_files.append(output_path)
                     success = True
                 except Exception as e:
+                    last_error = str(e)
                     logger.error(f"Erreur OCR (Tesseract) pour {pdf['path']}: {e}")
-            
+
             if not success:
                 logger.error(f"Échec de l'extraction OCR pour {pdf['path']} (Mistral et Tesseract)")
-        
-        return output_files
+                failed_extractions.append({"path": pdf["path"], "error": last_error or "Unknown"})
+
+        return output_files, failed_extractions
 
 
 class ChunkingService(IChunkingService):
@@ -267,10 +280,11 @@ class ChunkingService(IChunkingService):
         use_token_based = use_token_based if use_token_based is not None else settings.use_token_based_chunking
         filter_quality = filter_quality if filter_quality is not None else settings.filter_chunk_quality
         merge_small = merge_small if merge_small is not None else settings.merge_small_chunks
+        use_semantic = settings.use_semantic_chunking
         
         if self.verbose:
             logger.info(f"Début du chunking (mode: {chunking_mode.value})")
-            logger.info(f"Optimisations: token_based={use_token_based}, filter={filter_quality}, merge={merge_small}")
+            logger.info(f"Optimisations: token_based={use_token_based}, filter={filter_quality}, merge={merge_small}, semantic={use_semantic}")
         
         if chunking_mode == ChunkingMode.ADVANCED:
             results = process_all_markdown_files(
@@ -278,7 +292,7 @@ class ChunkingService(IChunkingService):
                 chunk_size=chunk_size,
                 chunk_overlap=chunk_overlap,
                 use_adaptive_chunking=True,
-                use_semantic_chunking=False,
+                use_semantic_chunking=use_semantic,
                 enable_ai_enrichment=True,
                 enable_context_augmentation=True,
                 augmentation_strategy="with_context",

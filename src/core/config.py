@@ -54,6 +54,7 @@ class Settings(BaseSettings):
     # ===== Chunking =====
     chunk_size: int = Field(default=1000, ge=100, description="Taille des chunks en caractères")
     chunk_overlap: int = Field(default=200, ge=0, description="Overlap entre chunks")
+    use_semantic_chunking: bool = Field(default=False, description="Chunking par sections sémantiques (idéal pour docs longs)")
     use_token_based_chunking: bool = Field(default=True, description="Utiliser chunking basé sur tokens")
     filter_chunk_quality: bool = Field(default=True, description="Filtrer les chunks de faible qualité")
     merge_small_chunks: bool = Field(default=True, description="Fusionner les petits chunks")
