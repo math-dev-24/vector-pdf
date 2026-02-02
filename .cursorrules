@@ -1,5 +1,13 @@
 # Cursor Rules - Vector PDF Project
 
+## 📦 Gestion des dépendances
+
+**Utiliser uniquement uv** pour ce projet :
+- `uv sync` — installer/synchroniser les dépendances
+- `uv run python script.py` — exécuter un script avec l'environnement du projet
+- `uv add package` — ajouter une dépendance
+- Ne pas utiliser pip, pipenv ou poetry
+
 ## 🏗️ Architecture
 
 ### Structure Modulaire
@@ -285,21 +293,26 @@ from src.pipeline.models import (
 
 ## 📚 Documentation
 
-- `ARCHITECTURE.md` : Architecture détaillée
-- `GUIDE_MIGRATION.md` : Guide de migration
-- `ANALYSE_AMELIORATIONS.md` : Analyse complète
-- `AMELIORATIONS_SUPPLEMENTAIRES.md` : Améliorations récentes
+- `README.md` : Guide d'installation et d'utilisation
+- `CONTRIBUTING.md` : Guide de contribution
 
 ## 🚀 Commandes Utiles
 
 ### Lancer le pipeline
 ```bash
-python generate.py
+uv run python generate.py
 ```
 
 ### Lancer les requêtes
 ```bash
-python ask.py
+uv run python ask.py
+```
+
+### Interface graphique
+```bash
+uv run python ui.py
+# ou
+uv run ocr-vector-ui
 ```
 
 ### Vérifier les lints

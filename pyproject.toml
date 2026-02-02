@@ -1,8 +1,9 @@
 [project]
 name = "ocr-vector-doc"
 version = "0.1.0"
-description = "Add your description here"
+description = "Pipeline PDF : extraction OCR, chunking, vectorisation et stockage Pinecone pour RAG"
 readme = "README.md"
+license = "MIT"
 requires-python = ">=3.13"
 dependencies = [
     "pymupdf>=1.24.0",
