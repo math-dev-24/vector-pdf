@@ -1,47 +1,47 @@
-# Guide de contribution
+# Contributing Guide
 
-Merci de votre intérêt pour contribuer à OCR-Vector-Doc. Ce document décrit les conventions et le processus de contribution.
+Thank you for your interest in contributing to OCR-Vector-Doc. This document describes the conventions and contribution process.
 
-## Démarrage rapide
+## Quick Start
 
-1. **Fork** le dépôt et cloner votre fork
-2. Installer les dépendances : `uv sync`
-3. Créer une **branche** pour votre fonctionnalité : `git checkout -b feature/ma-fonctionnalite`
-4. Faire vos **modifications** en respectant les conventions ci-dessous
-5. **Tester** vos changements
-6. **Commit** avec des messages clairs
-7. **Push** et ouvrir une Pull Request
+1. **Fork** the repository and clone your fork
+2. Install dependencies: `uv sync`
+3. Create a **branch** for your feature: `git checkout -b feature/my-feature`
+4. Make your **changes** following the conventions below
+5. **Test** your changes
+6. **Commit** with clear messages
+7. **Push** and open a Pull Request
 
-## Gestion des dépendances
+## Dependency Management
 
-Ce projet utilise **uniquement uv** :
-- `uv sync` — installer/synchroniser les dépendances
-- `uv run python script.py` — exécuter un script
-- `uv add package` — ajouter une dépendance (met à jour `pyproject.toml`)
+This project uses **uv only**:
+- `uv sync` — install/synchronize dependencies
+- `uv run python script.py` — run a script
+- `uv add package` — add a dependency (updates `pyproject.toml`)
 
-## Conventions de code
+## Code Conventions
 
 ### Architecture
 
-Le projet suit une architecture modulaire avec séparation des responsabilités :
+The project follows a modular architecture with separation of concerns:
 
-- **`src/core/`** : Configuration, logging, cache, singletons, retry
-- **`src/pipeline/`** : Logique métier pure (services, modèles)
-- **`src/cli/`** : Interface utilisateur CLI uniquement
-- **`src/extractors/`** : Extraction PDF
-- **`src/processors/`** : Traitement des documents
-- **`src/vectorization/`** : Embeddings et stockage
+- **`src/core/`**: Configuration, logging, cache, singletons, retry
+- **`src/pipeline/`**: Pure business logic (services, models)
+- **`src/cli/`**: CLI user interface only
+- **`src/extractors/`**: PDF extraction
+- **`src/processors/`**: Document processing
+- **`src/vectorization/`**: Embeddings and storage
 
-### Principes
+### Principles
 
-- **DRY** : Pas de duplication de code
-- **SRP** : Une responsabilité par classe/fonction
-- **Services purs** : Pas de `print()` ni `input()` dans la logique métier
-- **Type hints** : Toujours typer les paramètres et retours
+- **DRY**: No code duplication
+- **SRP**: One responsibility per class/function
+- **Pure services**: No `print()` or `input()` in business logic
+- **Type hints**: Always type parameters and return values
 
 ### Configuration
 
-Utiliser `src.core.settings` pour toute la configuration :
+Use `src.core.settings` for all configuration:
 
 ```python
 from src.core import settings
@@ -53,73 +53,73 @@ settings.embedding_model
 
 ### Logging
 
-Utiliser `get_logger()` au lieu de `print()` dans le code métier :
+Use `get_logger()` instead of `print()` in business logic:
 
 ```python
 from src.core import get_logger
 
 logger = get_logger(__name__)
 logger.info("Message")
-logger.error("Erreur", exc_info=True)
+logger.error("Error", exc_info=True)
 ```
 
-### Gestion d'erreurs
+### Error Handling
 
-Utiliser `PipelineError` avec `ErrorType` :
+Use `PipelineError` with `ErrorType`:
 
 ```python
 from src.core import PipelineError, ErrorType
 
 raise PipelineError(
     ErrorType.EMBEDDING,
-    "Message d'erreur",
+    "Error message",
     original_error=e
 )
 ```
 
-### Nouveau service
+### New Service
 
-1. Définir l'interface dans `src/pipeline/interfaces.py`
-2. Implémenter dans `src/pipeline/services.py`
-3. Ajouter le modèle `Result` dans `src/pipeline/models.py`
-4. Intégrer dans le `Pipeline`
+1. Define the interface in `src/pipeline/interfaces.py`
+2. Implement in `src/pipeline/services.py`
+3. Add the `Result` model in `src/pipeline/models.py`
+4. Integrate in the `Pipeline`
 
-## Format des commits
+## Commit Format
 
-Messages de commit clairs et concis :
+Clear and concise commit messages:
 
 ```
-type: description courte
+type: short description
 
-Description détaillée si nécessaire.
+Detailed description if needed.
 ```
 
-Types recommandés : `feat`, `fix`, `docs`, `refactor`, `test`, `chore`
+Recommended types: `feat`, `fix`, `docs`, `refactor`, `test`, `chore`
 
-Exemples :
-- `feat: ajout du mode Mistral OCR pour les scans`
-- `fix: correction du chunking pour les documents longs`
-- `docs: mise à jour du README`
+Examples:
+- `feat: add Mistral OCR mode for scans`
+- `fix: fix chunking for long documents`
+- `docs: update README`
 
 ## Tests
 
-Avant de soumettre une PR :
+Before submitting a PR:
 
 ```bash
-# Vérifier que les imports fonctionnent
+# Verify imports work
 uv run python -c "from src.pipeline import Pipeline; print('OK')"
 
-# Lancer le pipeline CLI pour un test manuel
+# Run pipeline CLI for manual test
 uv run python generate.py
 ```
 
 ## Pull Requests
 
-- Décrire clairement les changements
-- Référencer les issues liées si applicable
-- S'assurer que le code respecte les conventions du projet
-- Tester manuellement les flux principaux (extraction, vectorisation, ask)
+- Clearly describe the changes
+- Reference related issues if applicable
+- Ensure code follows project conventions
+- Manually test main flows (extraction, vectorization, ask)
 
 ## Questions
 
-Pour toute question, ouvrir une issue sur le dépôt.
+For any questions, open an issue on the repository.

@@ -1,7 +1,7 @@
 [project]
 name = "ocr-vector-doc"
 version = "0.1.0"
-description = "Pipeline PDF : extraction OCR, chunking, vectorisation et stockage Pinecone pour RAG"
+description = "PDF pipeline: OCR extraction, chunking, vectorization and Pinecone storage for RAG"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.13"

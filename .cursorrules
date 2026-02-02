@@ -1,40 +1,40 @@
 # Cursor Rules - Vector PDF Project
 
-## 📦 Gestion des dépendances
+## 📦 Dependency Management
 
-**Utiliser uniquement uv** pour ce projet :
-- `uv sync` — installer/synchroniser les dépendances
-- `uv run python script.py` — exécuter un script avec l'environnement du projet
-- `uv add package` — ajouter une dépendance
-- Ne pas utiliser pip, pipenv ou poetry
+**Use uv only** for this project:
+- `uv sync` — install/synchronize dependencies
+- `uv run python script.py` — run a script with project environment
+- `uv add package` — add a dependency
+- Do not use pip, pipenv, or poetry
 
 ## 🏗️ Architecture
 
-### Structure Modulaire
-- **`src/core/`** : Éléments fondamentaux (config, logging, cache, singletons, retry, metrics)
-- **`src/pipeline/`** : Logique métier pure (services, models, pipeline)
-- **`src/cli/`** : Interface utilisateur (séparée de la logique métier)
-- **`src/extractors/`** : Extraction PDFs
-- **`src/processors/`** : Traitement documents
-- **`src/vectorization/`** : Vectorisation et stockage
+### Modular Structure
+- **`src/core/`**: Core components (config, logging, cache, singletons, retry, metrics)
+- **`src/pipeline/`**: Pure business logic (services, models, pipeline)
+- **`src/cli/`**: User interface (separate from business logic)
+- **`src/extractors/`**: PDF extraction
+- **`src/processors/`**: Document processing
+- **`src/vectorization/`**: Vectorization and storage
 
-### Principes Architecturaux
-- **DRY** : Pas de duplication de code
-- **SRP** : Une responsabilité par classe
-- **Architecture Hexagonale** : Ports (interfaces) et Adapters (implémentations)
-- **Injection de Dépendances** : Services injectés dans le Pipeline
+### Architectural Principles
+- **DRY**: No code duplication
+- **SRP**: One responsibility per class
+- **Hexagonal Architecture**: Ports (interfaces) and Adapters (implementations)
+- **Dependency Injection**: Services injected into Pipeline
 
-### Séparation des Responsabilités
-- **Services métier** : Logique pure, sans I/O utilisateur (pas de `print()`, `input()`)
-- **Interface CLI** : Interaction utilisateur uniquement
-- **Pipeline** : Orchestration des services
+### Separation of Concerns
+- **Business services**: Pure logic, no user I/O (no `print()`, `input()`)
+- **CLI interface**: User interaction only
+- **Pipeline**: Service orchestration
 
-## 📐 Conventions de Code
+## 📐 Code Conventions
 
 ### Configuration
-- Utiliser `src.core.settings` pour toute la configuration
-- Configuration centralisée avec Pydantic Settings
-- Validation automatique au démarrage
+- Use `src.core.settings` for all configuration
+- Centralized configuration with Pydantic Settings
+- Automatic validation at startup
 
 ```python
 from src.core import settings
@@ -42,39 +42,39 @@ from src.core import settings
 ```
 
 ### Logging
-- Utiliser `get_logger(__name__)` au lieu de `print()`
-- Logging structuré avec niveaux appropriés
+- Use `get_logger(__name__)` instead of `print()`
+- Structured logging with appropriate levels
 
 ```python
 from src.core import get_logger
 logger = get_logger(__name__)
 logger.info("Message")
-logger.error("Erreur", exc_info=True)
+logger.error("Error", exc_info=True)
 ```
 
-### Gestion d'Erreurs
-- Utiliser `PipelineError` avec `ErrorType` pour les erreurs métier
-- Logger automatiquement les erreurs
+### Error Handling
+- Use `PipelineError` with `ErrorType` for business errors
+- Automatic error logging
 
 ```python
 from src.core import PipelineError, ErrorType
 raise PipelineError(
     ErrorType.EMBEDDING,
-    "Message d'erreur",
+    "Error message",
     original_error=e
 )
 ```
 
-### Clients API
-- Utiliser les singletons pour éviter les instanciations multiples
+### API Clients
+- Use singletons to avoid multiple instantiations
 
 ```python
 from src.core import OpenAIClient, PineconeClient
-client = OpenAIClient().client  # Réutilisé automatiquement
+client = OpenAIClient().client  # Reused automatically
 ```
 
 ### Retry Logic
-- Utiliser `retry_with_backoff` pour les appels API
+- Use `retry_with_backoff` for API calls
 
 ```python
 from src.core import retry_with_backoff
@@ -85,8 +85,8 @@ def api_call():
 ```
 
 ### Cache
-- Cache automatique des embeddings au niveau chunk
-- Utiliser `get_embedding_cache()` pour accéder au cache
+- Automatic embedding cache at chunk level
+- Use `get_embedding_cache()` to access cache
 
 ```python
 from src.core.cache import get_embedding_cache
@@ -95,12 +95,12 @@ cached = cache.get(content, model)
 cache.set(content, model, embedding)
 ```
 
-## 🔧 Services Métier
+## 🔧 Business Services
 
-### Création de Services
-- Hériter des interfaces dans `src/pipeline/interfaces.py`
-- Logique pure, pas d'I/O utilisateur
-- Retourner des objets `Result` (ExtractionResult, ChunkingResult, etc.)
+### Creating Services
+- Inherit from interfaces in `src/pipeline/interfaces.py`
+- Pure logic, no user I/O
+- Return `Result` objects (ExtractionResult, ChunkingResult, etc.)
 
 ```python
 from src.pipeline.interfaces import IExtractionService
@@ -108,13 +108,13 @@ from src.pipeline.models import ExtractionResult
 
 class ExtractionService(IExtractionService):
     def extract(...) -> ExtractionResult:
-        # Logique pure uniquement
+        # Pure logic only
         return ExtractionResult(...)
 ```
 
-### Modèles de Données
-- Utiliser les dataclasses dans `src/pipeline/models.py`
-- Utiliser les Enums pour les choix limités
+### Data Models
+- Use dataclasses in `src/pipeline/models.py`
+- Use Enums for limited choices
 
 ```python
 from src.pipeline.models import (
@@ -125,12 +125,12 @@ from src.pipeline.models import (
 )
 ```
 
-## 🎯 Patterns Importants
+## 🎯 Important Patterns
 
 ### Pipeline Pattern
-- Le Pipeline orchestre les services
-- Chaque étape retourne un Result
-- Gestion d'erreurs centralisée
+- Pipeline orchestrates services
+- Each step returns a Result
+- Centralized error handling
 
 ```python
 from src.pipeline import Pipeline, PipelineConfig
@@ -141,13 +141,13 @@ result = pipeline.run_full()
 ```
 
 ### Service Pattern
-- Services indépendants et testables
-- Injection de dépendances
-- Interfaces pour faciliter les mocks
+- Independent and testable services
+- Dependency injection
+- Interfaces for easy mocking
 
 ### State Manager
-- Utiliser `StateManager` pour sauvegarder/charger les états intermédiaires
-- Cache des chunks et embeddings
+- Use `StateManager` to save/load intermediate states
+- Cache for chunks and embeddings
 
 ```python
 from src.processors import StateManager
@@ -158,10 +158,10 @@ state_manager.load_chunks()
 
 ## 📝 Type Hints
 
-### Toujours utiliser des type hints
-- Paramètres et retours de fonctions
-- Variables importantes
-- Utiliser `Optional` pour les valeurs optionnelles
+### Always use type hints
+- Function parameters and returns
+- Important variables
+- Use `Optional` for optional values
 
 ```python
 from typing import List, Dict, Optional
@@ -175,41 +175,41 @@ def process(
     pass
 ```
 
-## 🚫 À Éviter
+## 🚫 Avoid
 
-### Dans les Services Métier
-- ❌ `print()` - Utiliser `logger`
-- ❌ `input()` - Pas d'interaction utilisateur
-- ❌ Gestion d'erreurs générique `except Exception`
-- ❌ Instanciation directe de clients API
+### In Business Services
+- ❌ `print()` — Use `logger`
+- ❌ `input()` — No user interaction
+- ❌ Generic error handling `except Exception`
+- ❌ Direct API client instantiation
 
-### Dans le Code Général
-- ❌ Configuration hardcodée
-- ❌ Duplication de code
-- ❌ Logique métier dans l'interface CLI
-- ❌ Pas de type hints
+### In General Code
+- ❌ Hardcoded configuration
+- ❌ Code duplication
+- ❌ Business logic in CLI interface
+- ❌ Missing type hints
 
-## ✅ Bonnes Pratiques
+## ✅ Best Practices
 
-### Code Propre
-- Fonctions courtes et focalisées
-- Noms explicites
-- Docstrings pour les fonctions publiques
-- Commentaires pour la logique complexe
+### Clean Code
+- Short, focused functions
+- Explicit names
+- Docstrings for public functions
+- Comments for complex logic
 
 ### Performance
-- Utiliser le cache des embeddings
-- Batch processing pour les APIs
-- Multithreading quand approprié (configurable)
+- Use embedding cache
+- Batch processing for APIs
+- Multithreading when appropriate (configurable)
 
-### Tests
-- Utiliser les interfaces pour créer des mocks
-- Tester chaque service indépendamment
-- Tests unitaires pour la logique métier
+### Testing
+- Use interfaces for mocks
+- Test each service independently
+- Unit tests for business logic
 
-## 🔄 Flux de Données
+## 🔄 Data Flow
 
-### Pipeline Complet
+### Full Pipeline
 ```
 1. Extraction (ExtractionService)
    PDFs → Markdown
@@ -218,13 +218,13 @@ def process(
    Markdown → Chunks
 
 3. Embedding (EmbeddingService)
-   Chunks → Embeddings (avec cache)
+   Chunks → Embeddings (with cache)
 
 4. Storage (StorageService)
    Embeddings → Pinecone
 ```
 
-## 📦 Imports Standards
+## 📦 Standard Imports
 
 ### Core
 ```python
@@ -256,77 +256,77 @@ from src.pipeline.models import (
 )
 ```
 
-## 🎨 Structure des Fichiers
+## 🎨 File Structure
 
-### Nouveau Service
-1. Créer l'interface dans `src/pipeline/interfaces.py`
-2. Implémenter dans `src/pipeline/services.py`
-3. Ajouter le modèle Result dans `src/pipeline/models.py`
-4. Utiliser dans `Pipeline`
+### New Service
+1. Create interface in `src/pipeline/interfaces.py`
+2. Implement in `src/pipeline/services.py`
+3. Add Result model in `src/pipeline/models.py`
+4. Use in `Pipeline`
 
-### Nouveau Module Core
-1. Créer dans `src/core/`
-2. Exporter dans `src/core/__init__.py`
-3. Documenter l'utilisation
+### New Core Module
+1. Create in `src/core/`
+2. Export in `src/core/__init__.py`
+3. Document usage
 
-## 🔍 Points Techniques Clés
+## 🔍 Key Technical Points
 
 ### Configuration
-- Pydantic Settings avec validation
-- Variables d'environnement via `.env`
-- Paths automatiquement convertis en `Path`
+- Pydantic Settings with validation
+- Environment variables via `.env`
+- Paths automatically converted to `Path`
 
 ### Cache
-- Hash SHA256 pour identifier les chunks
-- Structure de dossiers optimisée (2 premiers caractères)
-- Cache désactivable via `EMBEDDING_CACHE_ENABLED`
+- SHA256 hash to identify chunks
+- Optimized directory structure (first 2 characters)
+- Cache disable via `EMBEDDING_CACHE_ENABLED`
 
-### Métriques
-- `MetricsCollector` pour tracker les performances
-- Estimation des coûts API
-- Suivi des erreurs
+### Metrics
+- `MetricsCollector` to track performance
+- API cost estimation
+- Error tracking
 
 ### Retry
-- Exponential backoff configurable
-- Logging automatique des tentatives
-- Exceptions spécifiques capturables
+- Configurable exponential backoff
+- Automatic attempt logging
+- Specific capturable exceptions
 
 ## 📚 Documentation
 
-- `README.md` : Guide d'installation et d'utilisation
-- `CONTRIBUTING.md` : Guide de contribution
+- `README.md`: Installation and usage guide
+- `CONTRIBUTING.md`: Contributing guide
 
-## 🚀 Commandes Utiles
+## 🚀 Useful Commands
 
-### Lancer le pipeline
+### Run pipeline
 ```bash
 uv run python generate.py
 ```
 
-### Lancer les requêtes
+### Run queries
 ```bash
 uv run python ask.py
 ```
 
-### Interface graphique
+### Graphical interface
 ```bash
 uv run python ui.py
-# ou
+# or
 uv run ocr-vector-ui
 ```
 
-### Vérifier les lints
+### Linting
 ```bash
-# Les lints sont automatiques dans Cursor
+# Lints are automatic in Cursor
 ```
 
-## 💡 Rappels Importants
+## 💡 Important Reminders
 
-1. **Toujours utiliser `settings`** au lieu de variables d'environnement directes
-2. **Logger au lieu de print** dans le code métier
-3. **Interfaces pour les services** pour faciliter les tests
-4. **Type hints partout** pour la qualité du code
-5. **Services purs** sans I/O utilisateur
-6. **Cache automatique** pour les embeddings
-7. **Retry logic** pour les APIs
-8. **Métriques** pour monitorer les performances
+1. **Always use `settings`** instead of direct environment variables
+2. **Logger instead of print** in business code
+3. **Interfaces for services** to facilitate testing
+4. **Type hints everywhere** for code quality
+5. **Pure services** without user I/O
+6. **Automatic cache** for embeddings
+7. **Retry logic** for APIs
+8. **Metrics** to monitor performance

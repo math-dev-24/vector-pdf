@@ -1,42 +1,42 @@
 # OCR-Vector-Doc
 
-Pipeline de traitement de documents PDF : extraction OCR, chunking, vectorisation et stockage dans une base de données vectorielle (Pinecone). Idéal pour construire des applications RAG (Retrieval-Augmented Generation).
+PDF document processing pipeline: OCR extraction, chunking, vectorization, and storage in a vector database (Pinecone). Ideal for building RAG (Retrieval-Augmented Generation) applications.
 
-## Fonctionnalités
+## Features
 
-- **Extraction PDF** : Texte natif, scans (Tesseract), ou OCR avancé (Mistral AI)
-- **Modes d'extraction** : Basique, structurée (détection des titres), PyMuPDF4LLM
-- **Chunking intelligent** : Standard ou avancé (enrichissement IA, contexte)
-- **Vectorisation** : Embeddings OpenAI avec cache et batch processing
-- **Stockage** : Pinecone avec namespaces pour organiser les documents
-- **Interface** : CLI interactive, interface graphique (PySide6), scripts Python
+- **PDF Extraction**: Native text, scans (Tesseract), or advanced OCR (Mistral AI)
+- **Extraction Modes**: Basic, structured (title detection), PyMuPDF4LLM
+- **Smart Chunking**: Standard or advanced (AI enrichment, context)
+- **Vectorization**: OpenAI embeddings with cache and batch processing
+- **Storage**: Pinecone with namespaces to organize documents
+- **Interface**: Interactive CLI, GUI (PySide6), Python scripts
 
-## Prérequis
+## Prerequisites
 
-- **uv** : [Installation](https://docs.astral.sh/uv/getting-started/installation/)
+- **uv**: [Installation](https://docs.astral.sh/uv/getting-started/installation/)
 - **Python** 3.13+
-- **Tesseract OCR** (pour les PDFs scannés) : [Installation](https://github.com/tesseract-ocr/tesseract)
-- **Clés API** : OpenAI, Pinecone (Mistral optionnel pour OCR avancé)
+- **Tesseract OCR** (for scanned PDFs): [Installation](https://github.com/tesseract-ocr/tesseract)
+- **API Keys**: OpenAI, Pinecone (Mistral optional for advanced OCR)
 
 ## Installation
 
 ```bash
-# Cloner le dépôt
-git clone https://github.com/votre-org/vector-pdf.git
+# Clone the repository
+git clone https://github.com/your-org/vector-pdf.git
 cd vector-pdf
 
-# Installer les dépendances avec uv
+# Install dependencies with uv
 uv sync
 ```
 
 ## Configuration
 
-1. Copier le fichier d'exemple :
+1. Copy the example file:
    ```bash
    cp .env.example .env
    ```
 
-2. Éditer `.env` avec vos clés API :
+2. Edit `.env` with your API keys:
    ```env
    OPENAI_API_KEY=sk-...
    PINECONE_API_KEY=...
@@ -44,11 +44,11 @@ uv sync
    PINECONE_DIMENSION=1536
    ```
 
-3. Créer un index Pinecone (dimension 1536, métrique cosine) sur [app.pinecone.io](https://app.pinecone.io/)
+3. Create a Pinecone index (dimension 1536, cosine metric) at [app.pinecone.io](https://app.pinecone.io/)
 
-4. Placer vos PDFs dans le dossier `DATA/` (créé automatiquement)
+4. Place your PDFs in the `DATA/` folder (created automatically)
 
-## Utilisation
+## Usage
 
 ### Pipeline CLI (generate.py)
 
@@ -56,62 +56,62 @@ uv sync
 uv run python generate.py
 ```
 
-Menu interactif :
-1. **PDF to MD** — Extraction uniquement (PDF → Markdown)
-2. **Vectorisation** — Chunking + embeddings
-3. **Go to DB** — Stockage dans Pinecone
-4. **Pipeline complet** — Tout en une fois
-5. **État du cache** — Vérifier les données en cache
-6. **Nettoyer le cache** — Supprimer chunks/embeddings
+Interactive menu:
+1. **PDF to MD** — Extraction only (PDF → Markdown)
+2. **Vectorization** — Chunking + embeddings
+3. **Go to DB** — Storage in Pinecone
+4. **Full Pipeline** — All steps at once
+5. **Cache Status** — Check cached data
+6. **Clear Cache** — Remove chunks/embeddings
 
-### Interroger la base (ask.py)
+### Query the Database (ask.py)
 
 ```bash
 uv run python ask.py
 ```
 
-Permet de poser des questions en langage naturel et d'obtenir les chunks les plus pertinents via recherche sémantique.
+Ask questions in natural language and get the most relevant chunks via semantic search.
 
-### Interface graphique
+### Graphical Interface
 
 ```bash
 uv run python ui.py
-# ou
+# or
 uv run ocr-vector-ui
 ```
 
-### Structure des dossiers
+### Directory Structure
 
-| Dossier | Rôle |
-|---------|------|
-| `DATA/` | PDFs sources |
-| `OUTPUT/` | Fichiers Markdown extraits |
-| `.cache/` | Chunks et embeddings en cache |
+| Directory | Purpose |
+|-----------|---------|
+| `DATA/` | Source PDFs |
+| `OUTPUT/` | Extracted Markdown files |
+| `.cache/` | Cached chunks and embeddings |
 
 ## Architecture
 
 ```
 src/
 ├── core/          # Config, logging, cache, retry, singletons
-├── pipeline/      # Services métier (extraction, chunking, embedding, storage)
-├── cli/           # Interface CLI
-├── extractors/    # Extracteurs PDF (texte, scan, Mistral OCR)
-├── processors/    # Chunking, nettoyage, enrichissement
-├── vectorization/ # Embeddings, VectorStore Pinecone
-└── ui/            # Interface graphique PySide6
+├── pipeline/      # Business logic (extraction, chunking, embedding, storage)
+├── cli/           # CLI interface
+├── extractors/    # PDF extractors (text, scan, Mistral OCR)
+├── processors/    # Chunking, cleaning, enrichment
+├── vectorization/ # Embeddings, Pinecone VectorStore
+└── ui/            # PySide6 GUI
 ```
 
-## Configuration avancée (.env)
+## Advanced Configuration (.env)
 
-| Variable | Description | Défaut |
-|----------|-------------|--------|
-| `CHUNK_SIZE` | Taille des chunks (caractères) | 1000 |
-| `CHUNK_OVERLAP` | Chevauchement entre chunks | 200 |
-| `USE_SEMANTIC_CHUNKING` | Chunking par sections | false |
-| `EMBEDDING_MODEL` | Modèle OpenAI | text-embedding-3-small |
-| `USE_MISTRAL_OCR` | OCR Mistral pour scans | false |
-| `MAX_WORKERS_EMBEDDINGS` | Threads pour embeddings | 4 |
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `CHUNK_SIZE` | Chunk size (characters) | 1000 |
+| `CHUNK_OVERLAP` | Overlap between chunks | 200 |
+| `USE_SEMANTIC_CHUNKING` | Section-based chunking | false |
+| `EMBEDDING_MODEL` | OpenAI model | text-embedding-3-small |
+| `USE_MISTRAL_OCR` | Mistral OCR for scans | false |
+| `MAX_WORKERS_EMBEDDINGS` | Threads for embeddings | 4 |
 
-## Licence
+## License
 
-MIT License — voir [LICENSE](LICENSE) pour les détails.
+MIT License — see [LICENSE](LICENSE) for details.
