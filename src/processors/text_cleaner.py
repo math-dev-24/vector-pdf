@@ -711,30 +711,3 @@ def clean_text(
     return text.strip()
 
 
-def clean_markdown_file(input_path: str, output_path: str = None, is_ocr: bool = False) -> str:
-    """
-    Nettoie un fichier markdown et le sauvegarde.
-
-    Args:
-        input_path: Chemin du fichier d'entrée
-        output_path: Chemin du fichier de sortie (si None, écrase l'original)
-        is_ocr: True si le texte provient d'OCR
-
-    Returns:
-        Chemin du fichier nettoyé
-    """
-    if output_path is None:
-        output_path = input_path
-
-    # Lire le fichier
-    with open(input_path, 'r', encoding='utf-8') as f:
-        text = f.read()
-
-    # Nettoyer
-    cleaned_text = clean_text(text, is_ocr=is_ocr)
-
-    # Sauvegarder
-    with open(output_path, 'w', encoding='utf-8') as f:
-        f.write(cleaned_text)
-
-    return output_path

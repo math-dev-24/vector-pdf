@@ -11,7 +11,8 @@ from src.pipeline import Pipeline, PipelineConfig
 from src.pipeline.models import (
     ExtractionMode,
     PDFFilter,
-    ChunkingMode
+    ChunkingMode,
+    NamespaceStrategy
 )
 
 logger = get_logger(__name__)
@@ -78,7 +79,38 @@ class CLIApplication:
     def _get_namespace(self) -> str:
         """Demande le namespace à l'utilisateur."""
         return input("\nNamespace Pinecone (laisser vide pour default): ").strip()
-    
+
+    def _get_namespace_strategy(self) -> tuple[NamespaceStrategy, str, str]:
+        """
+        Demande la stratégie de namespace à l'utilisateur.
+
+        Returns:
+            Tuple (strategy, namespace, namespace_prefix)
+        """
+        print("\n💡 Stratégie de namespace Pinecone:")
+        print("  1. IA           (Dépannage / Dimensionnement / Général) [recommandé]")
+        print("  2. Par fichier  (1 namespace / document PDF)")
+        print("  3. Par dossier  (1 namespace / dossier source)")
+        print("  4. Unique       (tout dans un seul namespace)")
+
+        choice = input("\nVotre choix (1/2/3/4, défaut=1): ").strip()
+
+        if choice == "2":
+            strategy = NamespaceStrategy.BY_FILE
+            prefix = input("Préfixe optionnel (ex: 'v2', laisser vide pour aucun): ").strip()
+            return strategy, "", prefix
+        elif choice == "3":
+            strategy = NamespaceStrategy.BY_FOLDER
+            prefix = input("Préfixe optionnel (ex: 'v2', laisser vide pour aucun): ").strip()
+            return strategy, "", prefix
+        elif choice == "4":
+            strategy = NamespaceStrategy.NONE
+            namespace = input("Namespace (laisser vide pour default): ").strip()
+            return strategy, namespace, ""
+        else:
+            # Défaut : BY_AI
+            return NamespaceStrategy.BY_AI, "", ""
+
     def _get_reset_confirmation(self, namespace: str) -> bool:
         """Demande confirmation pour réinitialiser le namespace."""
         ns_display = f"'{namespace}'" if namespace else "(default)"
@@ -240,34 +272,43 @@ class CLIApplication:
             print("\n⚠️  Impossible de continuer sans embeddings.")
             return
         
-        # Demander confirmation pour reset
-        ns_display = f"'{namespace}'" if namespace else "(default)"
+        # Stratégie de namespace
+        ns_strategy, namespace, ns_prefix = self._get_namespace_strategy()
+
+        if ns_strategy == NamespaceStrategy.NONE:
+            ns_display = f"'{namespace}'" if namespace else "(default)"
+        else:
+            ns_display = f"automatique ({ns_strategy.value})"
+            if ns_prefix:
+                ns_display += f" avec préfixe '{ns_prefix}'"
         print(f"\n📌 Namespace cible: {ns_display}")
-        
+
         print("\n💡 Options de stockage:")
-        print(f"  1. Ajouter aux vecteurs existants du namespace {ns_display}")
-        print(f"  2. Réinitialiser le namespace {ns_display} avant l'ajout")
-        
+        print(f"  1. Ajouter aux vecteurs existants")
+        print(f"  2. Réinitialiser le(s) namespace(s) avant l'ajout")
+
         choice = input("Votre choix (1/2): ").strip()
         reset = (choice == "2")
-        
-        if reset:
+
+        if reset and ns_strategy == NamespaceStrategy.NONE:
             if not self._get_reset_confirmation(namespace):
                 print("Opération annulée.")
                 return
-        
+
         # Stockage
         config = PipelineConfig(
             data_dir=settings.data_dir,
             output_dir=settings.output_dir,
             namespace=namespace,
+            namespace_strategy=ns_strategy,
+            namespace_prefix=ns_prefix,
             reset_namespace=reset
         )
-        
+
         pipeline = Pipeline(config=config, state_manager=self.state_manager)
         chunks = enriched_results[0]['chunks'] if enriched_results else []
         storage_result = pipeline.store(chunks, reset=reset)
-        
+
         # Afficher les stats
         print("\n✅ Stockage terminé!")
         if storage_result.vector_store:
@@ -277,13 +318,17 @@ class CLIApplication:
             print(f"  - Total vecteurs: {stats['total_vectors']}")
             print(f"  - Dimension: {stats['dimension']}")
             print(f"  - Métrique: {stats['metric']}")
-            
-            if stats['namespaces']:
-                print(f"\n  Vecteurs par namespace:")
+
+            if storage_result.namespaces:
+                print(f"\n  Vecteurs uploadés par namespace:")
+                for ns_name, count in sorted(storage_result.namespaces.items()):
+                    print(f"    - {ns_name}: {count} chunks")
+            elif stats['namespaces']:
+                print(f"\n  Vecteurs par namespace (Pinecone):")
                 for ns, ns_stats in stats['namespaces'].items():
                     ns_name = ns if ns else "(default)"
                     print(f"    - {ns_name}: {ns_stats.get('vector_count', 0)} vecteurs")
-        
+
         print(f"\n💡 Dashboard Pinecone: https://app.pinecone.io/")
     
     def run_full_pipeline(self) -> None:
@@ -291,24 +336,23 @@ class CLIApplication:
         print("\n" + "=" * 60)
         print("🔄 PIPELINE COMPLET")
         print("=" * 60)
-        
-        namespace = self._get_namespace()
+
         extraction_mode, pdf_filter = self._get_extraction_config()
-        
+        chunking_mode = self._get_chunking_config()
+        ns_strategy, namespace, ns_prefix = self._get_namespace_strategy()
+
         print("\n💡 Options de la base de données vectorielle:")
         print("  1. Ajouter aux vecteurs existants")
-        print("  2. Réinitialiser le namespace avant l'ajout")
-        
+        print("  2. Réinitialiser le(s) namespace(s) avant l'ajout")
+
         choice = input("\nVotre choix (1/2, défaut=1): ").strip()
         reset = (choice == "2")
-        
-        if reset:
+
+        if reset and ns_strategy == NamespaceStrategy.NONE:
             if not self._get_reset_confirmation(namespace):
                 print("Opération annulée.")
                 return
-        
-        chunking_mode = self._get_chunking_config()
-        
+
         # Configuration complète
         config = PipelineConfig(
             data_dir=settings.data_dir,
@@ -321,6 +365,8 @@ class CLIApplication:
             embedding_model=settings.embedding_model,
             embedding_batch_size=settings.embedding_batch_size,
             namespace=namespace,
+            namespace_strategy=ns_strategy,
+            namespace_prefix=ns_prefix,
             reset_namespace=reset
         )
         
@@ -339,9 +385,13 @@ class CLIApplication:
                 print(f"  - Total vecteurs: {stats['total_vectors']}")
                 print(f"  - Dimension: {stats['dimension']}")
                 print(f"  - Métrique: {stats['metric']}")
-                
-                if stats['namespaces']:
-                    print(f"\n  Vecteurs par namespace:")
+
+                if result.storage.namespaces:
+                    print(f"\n  Chunks uploadés par namespace:")
+                    for ns_name, count in sorted(result.storage.namespaces.items()):
+                        print(f"    - {ns_name}: {count} chunks")
+                elif stats['namespaces']:
+                    print(f"\n  Vecteurs par namespace (Pinecone):")
                     for ns, ns_stats in stats['namespaces'].items():
                         ns_name = ns if ns else "(default)"
                         print(f"    - {ns_name}: {ns_stats.get('vector_count', 0)} vecteurs")

@@ -1,117 +1,137 @@
 # OCR-Vector-Doc
 
-PDF document processing pipeline: OCR extraction, chunking, vectorization, and storage in a vector database (Pinecone). Ideal for building RAG (Retrieval-Augmented Generation) applications.
+Pipeline de traitement de documents PDF : extraction OCR, chunking, vectorisation, et stockage dans une base vectorielle (Pinecone). Conçu pour des applications RAG (Retrieval-Augmented Generation).
 
-## Features
+---
 
-- **PDF Extraction**: Native text, scans (Tesseract), or advanced OCR (Mistral AI)
-- **Extraction Modes**: Basic, structured (title detection), PyMuPDF4LLM
-- **Smart Chunking**: Standard or advanced (AI enrichment, context)
-- **Vectorization**: OpenAI embeddings with cache and batch processing
-- **Storage**: Pinecone with namespaces to organize documents
-- **Interface**: Interactive CLI, GUI (PySide6), Python scripts
+## Fonctionnalités
 
-## Prerequisites
+- **Extraction PDF** : texte natif, scans (Tesseract), ou OCR avancé (Mistral AI)
+- **Modes d'extraction** : basique, structuré (détection de titres), PyMuPDF4LLM
+- **Chunking intelligent** : standard ou avancé (enrichissement IA, contexte)
+- **Vectorisation** : embeddings OpenAI avec cache et traitement par batch
+- **Namespaces automatiques** : classification IA en 3 catégories (Dépannage / Dimensionnement / Général), ou par fichier, par dossier, ou manuel
+- **Stockage** : Pinecone serverless
+- **Interfaces** : CLI interactive, GUI (PySide6), scripts Python
 
-- **uv**: [Installation](https://docs.astral.sh/uv/getting-started/installation/)
+---
+
+## Prérequis
+
+- **uv** : [Installation](https://docs.astral.sh/uv/getting-started/installation/)
 - **Python** 3.13+
-- **Tesseract OCR** (for scanned PDFs): [Installation](https://github.com/tesseract-ocr/tesseract)
-- **API Keys**: OpenAI, Pinecone (Mistral optional for advanced OCR)
+- **Tesseract OCR** (pour les PDFs scannés) : [Installation](https://github.com/tesseract-ocr/tesseract)
+- **Clés API** : OpenAI, Pinecone (Mistral optionnel pour l'OCR avancé)
+
+---
 
 ## Installation
 
 ```bash
-# Clone the repository
 git clone https://github.com/your-org/vector-pdf.git
 cd vector-pdf
-
-# Install dependencies with uv
 uv sync
 ```
 
+---
+
 ## Configuration
 
-1. Copy the example file:
+1. Copier le fichier d'exemple :
    ```bash
    cp .env.example .env
    ```
 
-2. Edit `.env` with your API keys:
+2. Renseigner les clés API dans `.env` :
    ```env
    OPENAI_API_KEY=sk-...
    PINECONE_API_KEY=...
    PINECONE_INDEX_NAME=pdf-documents
-   PINECONE_DIMENSION=1536
    ```
 
-3. Create a Pinecone index (dimension 1536, cosine metric) at [app.pinecone.io](https://app.pinecone.io/)
+3. Placer les PDFs dans le dossier `DATA/` (créé automatiquement).
 
-4. Place your PDFs in the `DATA/` folder (created automatically)
+Voir [`docs/configuration.md`](docs/configuration.md) pour toutes les options disponibles.
 
-## Usage
+---
 
-### Pipeline CLI (generate.py)
+## Utilisation
+
+### CLI interactive
 
 ```bash
 uv run python generate.py
 ```
 
-Interactive menu:
-1. **PDF to MD** — Extraction only (PDF → Markdown)
-2. **Vectorization** — Chunking + embeddings
-3. **Go to DB** — Storage in Pinecone
-4. **Full Pipeline** — All steps at once
-5. **Cache Status** — Check cached data
-6. **Clear Cache** — Remove chunks/embeddings
+Menu :
+```
+1. PDF to MD          — Extraction uniquement (PDF → Markdown)
+2. Vectorisation      — Chunking + embeddings
+3. Go to DB           — Stockage dans Pinecone
+4. Pipeline complet   — Toutes les étapes d'un coup
+5. État du cache      — Voir les données en cache
+6. Nettoyer le cache  — Supprimer chunks/embeddings
+```
 
-### Query the Database (ask.py)
+### Interroger la base (semantic search)
 
 ```bash
 uv run python ask.py
 ```
 
-Ask questions in natural language and get the most relevant chunks via semantic search.
-
-### Graphical Interface
+### Interface graphique
 
 ```bash
 uv run python ui.py
-# or
+# ou
 uv run ocr-vector-ui
 ```
 
-### Directory Structure
+---
 
-| Directory | Purpose |
-|-----------|---------|
-| `DATA/` | Source PDFs |
-| `OUTPUT/` | Extracted Markdown files |
-| `.cache/` | Cached chunks and embeddings |
+## Stratégie de namespace (Pinecone)
 
-## Architecture
+Lors du stockage dans Pinecone, chaque chunk est assigné à un namespace selon la stratégie choisie.
+
+| Stratégie | Description | Exemple |
+|---|---|---|
+| **IA** *(défaut)* | GPT-4o-mini classifie chaque chunk | `depannage`, `dimensionnement`, `general` |
+| **Par fichier** | 1 namespace = 1 fichier PDF | `rapport_2024`, `notice_installation` |
+| **Par dossier** | 1 namespace = 1 dossier source | `contrats`, `manuels` |
+| **Manuel** | Namespace unique saisi à la main | `mon-projet-v2` |
+
+La stratégie IA utilise 3 namespaces fixes :
+- `depannage` — diagnostic, codes d'erreur, résolution de pannes
+- `dimensionnement` — calculs, sélection matériel, spécifications, débits
+- `general` — présentation, normes, sécurité, tables des matières
+
+---
+
+## Structure du projet
 
 ```
-src/
-├── core/          # Config, logging, cache, retry, singletons
-├── pipeline/      # Business logic (extraction, chunking, embedding, storage)
-├── cli/           # CLI interface
-├── extractors/    # PDF extractors (text, scan, Mistral OCR)
-├── processors/    # Chunking, cleaning, enrichment
-├── vectorization/ # Embeddings, Pinecone VectorStore
-└── ui/            # PySide6 GUI
+vector-pdf/
+├── DATA/                   # PDFs source (input)
+├── OUTPUT/                 # Markdowns extraits
+├── .cache/                 # Cache chunks + embeddings
+├── docs/
+│   ├── architecture.md     # Architecture technique détaillée
+│   └── configuration.md    # Référence de toutes les options .env
+├── src/
+│   ├── core/               # Config, logging, cache, retry, singletons
+│   ├── pipeline/           # Orchestration (extraction → chunking → embedding → storage)
+│   ├── cli/                # Interface CLI
+│   ├── extractors/         # Extracteurs PDF (texte, scan, Mistral OCR)
+│   ├── processors/         # Chunking, nettoyage, enrichissement
+│   ├── vectorization/      # Embeddings OpenAI, VectorStore Pinecone, classifier IA
+│   └── ui/                 # Interface graphique PySide6
+├── generate.py             # Point d'entrée CLI
+├── ask.py                  # Recherche sémantique
+└── ui.py                   # Point d'entrée GUI
 ```
 
-## Advanced Configuration (.env)
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `CHUNK_SIZE` | Chunk size (characters) | 1000 |
-| `CHUNK_OVERLAP` | Overlap between chunks | 200 |
-| `USE_SEMANTIC_CHUNKING` | Section-based chunking | false |
-| `EMBEDDING_MODEL` | OpenAI model | text-embedding-3-small |
-| `USE_MISTRAL_OCR` | Mistral OCR for scans | false |
-| `MAX_WORKERS_EMBEDDINGS` | Threads for embeddings | 4 |
+---
 
 ## License
 
-MIT License — see [LICENSE](LICENSE) for details.
+MIT License — voir [LICENSE](LICENSE) pour les détails.

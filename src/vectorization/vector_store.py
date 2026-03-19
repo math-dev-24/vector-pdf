@@ -6,6 +6,8 @@ import os
 import time
 import unicodedata
 import re
+from collections import defaultdict
+from pathlib import Path
 from typing import List, Dict, Optional
 from pinecone import Pinecone, ServerlessSpec
 
@@ -36,6 +38,32 @@ def sanitize_vector_id(text: str) -> str:
     text = text.strip('_')
 
     return text
+
+
+def _compute_namespace(chunk: Dict, strategy: str, prefix: str = "") -> str:
+    """
+    Calcule le namespace Pinecone pour un chunk selon la stratégie.
+
+    Args:
+        chunk: Dict avec 'metadata' (file_name, source)
+        strategy: "by_file", "by_folder" ou "none"
+        prefix: Préfixe optionnel
+
+    Returns:
+        Namespace sanitisé (str vide = namespace default Pinecone)
+    """
+    if strategy == "by_file":
+        file_name = chunk.get('metadata', {}).get('file_name', 'unknown')
+        ns = sanitize_vector_id(Path(file_name).stem)
+    elif strategy == "by_folder":
+        source = chunk.get('metadata', {}).get('source', '')
+        folder = Path(source).parent.name if source else 'unknown'
+        ns = sanitize_vector_id(folder) if folder else 'unknown'
+    else:
+        # NONE : namespace unique = le préfixe (ou default si vide)
+        return prefix
+
+    return f"{prefix}_{ns}" if prefix else ns
 
 
 class VectorStore:
@@ -85,8 +113,8 @@ class VectorStore:
                 dimension=self.dimension,
                 metric=self.metric,
                 spec=ServerlessSpec(
-                    cloud="aws",
-                    region="us-east-1"  # Région gratuite
+                    cloud=settings.pinecone_cloud,
+                    region=settings.pinecone_region
                 )
             )
 
@@ -207,6 +235,78 @@ class VectorStore:
                 ns_count = stats.get('namespaces', {}).get(namespace, {}).get('vector_count', 0)
                 print(f"  Total dans le namespace '{namespace}': {ns_count}")
             print(f"  Total dans l'index: {stats['total_vector_count']}")
+
+    def add_chunks_distributed(
+        self,
+        chunks: List[Dict],
+        strategy: str = "by_file",
+        namespace_prefix: str = "",
+        batch_size: int = 100,
+        verbose: bool = True,
+        embedding_version: Optional[str] = None
+    ) -> Dict[str, int]:
+        """
+        Distribue les chunks dans des namespaces distincts selon la stratégie choisie.
+
+        Stratégies disponibles :
+        - "by_file"   : un namespace par fichier source (nom du fichier sans extension)
+        - "by_folder" : un namespace par dossier parent du fichier source
+        - "by_ai"     : classification OpenAI → Dépannage / Dimensionnement / Général
+        - "none"      : tous les chunks dans namespace_prefix (ou default si vide)
+
+        Args:
+            chunks: Liste de dicts avec 'content', 'metadata', 'embedding'
+            strategy: Stratégie de répartition
+            namespace_prefix: Préfixe ajouté devant chaque namespace calculé
+            batch_size: Taille des batchs pour l'upload Pinecone
+            verbose: Afficher la progression
+            embedding_version: Version des embeddings (optionnel)
+
+        Returns:
+            Dict {namespace: nombre_de_chunks_uploadés}
+        """
+        groups: Dict[str, List[Dict]] = defaultdict(list)
+
+        if strategy == "by_ai":
+            # Classification IA : chaque chunk reçoit son namespace individuellement
+            from src.vectorization.namespace_classifier import classify_chunks
+            namespaces = classify_chunks(chunks, verbose=verbose)
+            for chunk, ns in zip(chunks, namespaces):
+                groups[ns].append(chunk)
+        else:
+            # Stratégies mécaniques : by_file, by_folder, none
+            for chunk in chunks:
+                ns = _compute_namespace(chunk, strategy, namespace_prefix)
+                groups[ns].append(chunk)
+
+        if verbose:
+            print(f"\n=== Distribution par namespaces ===")
+            print(f"Stratégie : {strategy}")
+            print(f"Namespaces : {len(groups)}")
+            for ns, ns_chunks in sorted(groups.items()):
+                ns_display = ns if ns else "(default)"
+                print(f"  - {ns_display}: {len(ns_chunks)} chunks")
+            print()
+
+        # Upload chaque groupe dans son namespace
+        counts: Dict[str, int] = {}
+        for ns, ns_chunks in sorted(groups.items()):
+            ns_display = ns if ns else "(default)"
+            if verbose:
+                print(f"→ Upload namespace '{ns_display}' ({len(ns_chunks)} chunks)...")
+            self.add_chunks(
+                ns_chunks,
+                batch_size=batch_size,
+                namespace=ns,
+                verbose=False,
+                embedding_version=embedding_version
+            )
+            counts[ns_display] = len(ns_chunks)
+
+        if verbose:
+            print(f"\n✓ {len(chunks)} chunks distribués dans {len(groups)} namespace(s)")
+
+        return counts
 
     def query(
         self,

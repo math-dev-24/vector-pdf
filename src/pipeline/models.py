@@ -29,30 +29,40 @@ class ChunkingMode(str, Enum):
     ADVANCED = "advanced"
 
 
+class NamespaceStrategy(str, Enum):
+    """Stratégie de répartition des données en namespaces Pinecone."""
+    NONE = "none"          # Namespace unique (comportement original)
+    BY_FILE = "by_file"    # Un namespace par fichier source
+    BY_FOLDER = "by_folder"  # Un namespace par dossier source
+    BY_AI = "by_ai"        # Classification IA : Dépannage / Dimensionnement / Général
+
+
 @dataclass
 class PipelineConfig:
     """Configuration du pipeline."""
     # Dossiers
     data_dir: Path
     output_dir: Path
-    
+
     # Extraction
     extraction_mode: ExtractionMode = ExtractionMode.STRUCTURED
     pdf_filter: PDFFilter = PDFFilter.ALL
-    
+
     # Chunking
     chunking_mode: ChunkingMode = ChunkingMode.ADVANCED
     chunk_size: int = 1000
     chunk_overlap: int = 200
-    
+
     # Embeddings
     embedding_model: str = "text-embedding-3-small"
     embedding_batch_size: int = 100
-    
+
     # Storage
-    namespace: str = ""
+    namespace: str = ""              # Namespace explicite (utilisé avec strategy=NONE)
+    namespace_strategy: NamespaceStrategy = NamespaceStrategy.BY_AI
+    namespace_prefix: str = ""       # Préfixe optionnel pour les namespaces auto-générés
     reset_namespace: bool = False
-    
+
     # Options
     verbose: bool = True
 
@@ -89,6 +99,7 @@ class StorageResult:
     vector_store: Optional[object] = None
     total_vectors: int = 0
     namespace: str = ""
+    namespaces: Dict[str, int] = field(default_factory=dict)  # namespace → nombre de vecteurs
 
 
 @dataclass

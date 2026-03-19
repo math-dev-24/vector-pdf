@@ -22,6 +22,7 @@ from .models import (
     ExtractionMode,
     PDFFilter,
     ChunkingMode,
+    NamespaceStrategy,
     ExtractionResult,
     ChunkingResult,
     EmbeddingResult,
@@ -453,47 +454,80 @@ class StorageService(IStorageService):
         self,
         enriched_chunks: List[Dict],
         namespace: str = "",
+        namespace_strategy: NamespaceStrategy = NamespaceStrategy.BY_AI,
+        namespace_prefix: str = "",
         reset: bool = False
     ) -> StorageResult:
         """
         Stocke les embeddings dans Pinecone.
-        
+
+        Selon la stratégie :
+        - NONE      : tous les chunks dans `namespace` (comportement original)
+        - BY_FILE   : un namespace par fichier source (ex: "rapport_2024")
+        - BY_FOLDER : un namespace par dossier parent (ex: "contrats")
+
         Args:
             enriched_chunks: Chunks avec embeddings
-            namespace: Namespace Pinecone
-            reset: Réinitialiser le namespace
-            
+            namespace: Namespace explicite (utilisé uniquement avec strategy=NONE)
+            namespace_strategy: Stratégie de répartition
+            namespace_prefix: Préfixe pour les namespaces auto-générés
+            reset: Réinitialiser le(s) namespace(s) avant l'ajout
+
         Returns:
-            Résultat du stockage
+            Résultat du stockage avec stats par namespace
         """
         if self.verbose:
-            logger.info(f"Stockage dans Pinecone (namespace: {namespace or 'default'})")
-        
-        # Réorganiser en format attendu par store_embeddings
-        enriched_results = [{
-            'file_path': 'combined',
-            'file_name': 'combined',
-            'num_chunks': len(enriched_chunks),
-            'total_chars': sum(len(c.get('content', '')) for c in enriched_chunks),
-            'chunks': enriched_chunks
-        }]
-        
-        vector_store = store_embeddings(
-            enriched_results=enriched_results,
+            if namespace_strategy == NamespaceStrategy.NONE:
+                logger.info(f"Stockage dans Pinecone (namespace: {namespace or 'default'})")
+            else:
+                logger.info(f"Stockage dans Pinecone (stratégie: {namespace_strategy.value})")
+
+        vector_store = VectorStore(
             index_name=settings.pinecone_index_name,
-            dimension=settings.pinecone_dimension,
-            namespace=namespace,
-            reset=reset,
-            embedding_version=settings.embedding_version
+            dimension=settings.pinecone_dimension
         )
-        
+
+        if namespace_strategy == NamespaceStrategy.NONE:
+            # Comportement original : namespace unique
+            if reset:
+                ns_name = namespace if namespace else "(default)"
+                print(f"⚠️  Reset: suppression du namespace '{ns_name}'...")
+                vector_store.delete_all(namespace=namespace)
+
+            enriched_results = [{
+                'file_path': 'combined',
+                'file_name': 'combined',
+                'num_chunks': len(enriched_chunks),
+                'total_chars': sum(len(c.get('content', '')) for c in enriched_chunks),
+                'chunks': enriched_chunks
+            }]
+            store_embeddings(
+                enriched_results=enriched_results,
+                index_name=settings.pinecone_index_name,
+                dimension=settings.pinecone_dimension,
+                namespace=namespace,
+                reset=False,  # reset déjà géré ci-dessus
+                embedding_version=settings.embedding_version
+            )
+            ns_counts = {namespace or "(default)": len(enriched_chunks)}
+        else:
+            # Distribution automatique par namespace
+            ns_counts = vector_store.add_chunks_distributed(
+                chunks=enriched_chunks,
+                strategy=namespace_strategy.value,
+                namespace_prefix=namespace_prefix,
+                verbose=self.verbose,
+                embedding_version=settings.embedding_version
+            )
+
         stats = vector_store.get_stats()
-        
+
         if self.verbose:
-            logger.info(f"Stockage terminé: {stats['total_vectors']} vecteurs")
-        
+            logger.info(f"Stockage terminé: {stats['total_vectors']} vecteurs dans {len(ns_counts)} namespace(s)")
+
         return StorageResult(
             vector_store=vector_store,
             total_vectors=stats['total_vectors'],
-            namespace=namespace
+            namespace=namespace,
+            namespaces=ns_counts
         )

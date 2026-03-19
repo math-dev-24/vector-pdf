@@ -272,63 +272,6 @@ class SectionDetector:
         print("\n" + "=" * 60)
 
 
-def add_section_metadata(
-    chunking_results: List[Dict],
-    verbose: bool = True
-) -> List[Dict]:
-    """
-    Ajoute les métadonnées de section à tous les chunks.
-
-    Args:
-        chunking_results: Résultats du chunking
-        verbose: Afficher progression
-
-    Returns:
-        Résultats avec métadonnées de section
-    """
-    if verbose:
-        print("\n📑 Détection de la structure des documents...")
-
-    detector = SectionDetector()
-    enriched_results = []
-
-    for result in chunking_results:
-        if verbose:
-            print(f"\n  📄 {result['file_name']}")
-
-        # Lire le fichier pour avoir le texte complet
-        try:
-            with open(result['file_path'], 'r', encoding='utf-8') as f:
-                full_text = f.read()
-        except Exception as e:
-            print(f"    ⚠️  Impossible de lire le fichier: {e}")
-            enriched_results.append(result)
-            continue
-
-        # Ajouter contexte de section
-        enriched_chunks = detector.add_section_context_to_chunks(
-            chunks=result['chunks'],
-            document_text=full_text
-        )
-
-        if verbose:
-            sections_found = len(detector.sections)
-            print(f"    ✅ {sections_found} section(s) détectée(s)")
-
-        enriched_results.append({
-            'file_path': result['file_path'],
-            'file_name': result['file_name'],
-            'num_chunks': result['num_chunks'],
-            'total_chars': result['total_chars'],
-            'chunks': enriched_chunks,
-            'sections': detector.sections  # Ajouter la structure pour référence
-        })
-
-    if verbose:
-        total_sections = sum(len(r.get('sections', [])) for r in enriched_results)
-        print(f"\n✅ Structure détectée: {total_sections} sections au total")
-
-    return enriched_results
 
 
 if __name__ == "__main__":

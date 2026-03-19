@@ -175,5 +175,7 @@ class Pipeline:
         return self.storage_service.store(
             enriched_chunks=enriched_chunks,
             namespace=self.config.namespace,
+            namespace_strategy=self.config.namespace_strategy,
+            namespace_prefix=self.config.namespace_prefix,
             reset=reset
         )

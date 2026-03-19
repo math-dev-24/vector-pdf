@@ -9,13 +9,16 @@ from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
 
-from src.core import setup_logging
+from src.core import setup_logging, settings
 from .main_window import MainWindow
 
 
 def run_ui() -> int:
     """Lance l'interface graphique. Retourne le code de sortie."""
-    setup_logging()
+    setup_logging(
+        level=settings.log_level,
+        log_file=settings.log_file,
+    )
 
     app = QApplication(sys.argv)
     app.setApplicationName("OCR-VECTOR-DOC")

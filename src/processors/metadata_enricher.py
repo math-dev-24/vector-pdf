@@ -378,58 +378,6 @@ Limites: max 5 par catégorie. Si aucune info, retourne liste vide []."""
         return enriched_chunks
 
 
-# Fonctions utilitaires
-
-def enrich_all_chunks(
-    chunking_results: List[Dict],
-    use_ai: bool = True,
-    verbose: bool = True
-) -> List[Dict]:
-    """
-    Enrichit tous les chunks de tous les fichiers.
-
-    Args:
-        chunking_results: Résultats du chunking
-        use_ai: Utiliser l'IA pour enrichissement
-        verbose: Afficher progression
-
-    Returns:
-        Résultats enrichis
-    """
-    enricher = MetadataEnricher(use_ai=use_ai)
-
-    if verbose:
-        print("\n🧠 Enrichissement des métadonnées...")
-        if use_ai:
-            print(f"   Mode: IA activée (modèle: {enricher.model})")
-        else:
-            print("   Mode: Extraction basique (sans IA)")
-
-    enriched_results = []
-
-    for result in chunking_results:
-        if verbose:
-            print(f"\n  📄 {result['file_name']}")
-
-        enriched_chunks = enricher.enrich_batch(
-            chunks=result['chunks'],
-            use_ai=use_ai,
-            verbose=verbose
-        )
-
-        enriched_results.append({
-            'file_path': result['file_path'],
-            'file_name': result['file_name'],
-            'num_chunks': result['num_chunks'],
-            'total_chars': result['total_chars'],
-            'chunks': enriched_chunks
-        })
-
-    if verbose:
-        total_chunks = sum(len(r['chunks']) for r in enriched_results)
-        print(f"\n✅ Enrichissement terminé: {total_chunks} chunks enrichis")
-
-    return enriched_results
 
 
 if __name__ == "__main__":

@@ -8,15 +8,18 @@ Chunker avancé qui orchestre tous les modules d'amélioration:
 """
 
 import os
+import logging
 from pathlib import Path
 from typing import List, Dict, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+logger = logging.getLogger(__name__)
+
 from .text_cleaner import clean_text
-from .section_detector import SectionDetector, add_section_metadata
+from .section_detector import SectionDetector
 from .chunking_strategies import AdaptiveChunker, SemanticChunker, ContentTypeDetector
-from .metadata_enricher import MetadataEnricher, enrich_all_chunks
-from .contextual_augmenter import ContextualAugmenter, augment_all_chunks
+from .metadata_enricher import MetadataEnricher
+from .contextual_augmenter import ContextualAugmenter
 
 
 class AdvancedChunker:
@@ -89,9 +92,32 @@ class AdvancedChunker:
         is_ocr = 'scan' in file_path.lower() or '_ocr' in file_path.lower()
         text = clean_text(text, is_ocr=is_ocr)
 
+        cleaned_length = len(text)
+        reduction_pct = 100 * (1 - cleaned_length / original_length) if original_length > 0 else 0
+
+        if reduction_pct > 50:
+            logger.warning(
+                f"{os.path.basename(file_path)}: nettoyage agressif — "
+                f"{reduction_pct:.1f}% du texte supprimé ({original_length} → {cleaned_length} chars). "
+                "Vérifier les filtres de text_cleaner."
+            )
+
         if verbose:
-            cleaned_percent = 100 * (1 - len(text) / original_length) if original_length > 0 else 0
-            print(f"  🧹 Nettoyage: {cleaned_percent:.1f}% de réduction")
+            print(f"  🧹 Nettoyage: {reduction_pct:.1f}% de réduction")
+
+        if cleaned_length < 50:
+            if verbose:
+                print(f"  ⚠️  Texte quasi-vide après nettoyage ({cleaned_length} chars), fichier ignoré")
+            return {
+                'file_path': file_path,
+                'file_name': os.path.basename(file_path),
+                'num_chunks': 0,
+                'total_chars': 0,
+                'chunks': [],
+                'sections': [],
+                'original_length': original_length,
+                'cleaned_length': cleaned_length
+            }
 
         # 2. Détecter la structure (sections)
         self.section_detector.parse_document(text)
@@ -135,9 +161,19 @@ class AdvancedChunker:
 
         # 4. Créer chunks avec métadonnées de base
         chunks_with_metadata = []
-        char_position = 0
+        search_start = 0  # Fix #2: recherche réelle dans le texte nettoyé
 
         for i, chunk_text in enumerate(chunks_text):
+            # Trouver la position réelle du chunk dans le texte nettoyé
+            lookup = chunk_text[:min(80, len(chunk_text))]
+            pos = text.find(lookup, search_start)
+            if pos != -1:
+                char_position = pos
+                # Avancer d'au moins 1 char pour que le prochain chunk puisse se trouver après
+                search_start = pos + max(1, len(chunk_text) - self.chunk_overlap)
+            else:
+                char_position = search_start
+
             # Trouver la section correspondante
             section = self.section_detector.get_section_for_text_position(text, char_position)
 
@@ -165,8 +201,6 @@ class AdvancedChunker:
                 'metadata': base_metadata
             })
 
-            char_position += len(chunk_text)
-
         # 5. Enrichissement de métadonnées (IA + basique)
         if verbose:
             print(f"  🧠 Enrichissement de métadonnées...")
@@ -178,24 +212,27 @@ class AdvancedChunker:
         )
 
         # 6. Augmentation contextuelle
+        # Fix #3 : le contenu brut reste dans 'content' (pour l'embedding),
+        # la version augmentée va dans metadata['display_content'] (pour l'affichage).
         if self.enable_context_augmentation:
             if verbose:
                 print(f"  ✨ Augmentation contextuelle ({self.augmentation_strategy})...")
 
             for i, chunk in enumerate(chunks_with_metadata):
-                if self.augmentation_strategy == "with_context":
-                    augmented = self.contextual_augmenter.augment_chunk(chunk)
-                elif self.augmentation_strategy == "embedding_optimized":
-                    optimized_text = self.contextual_augmenter.create_embedding_optimized_text(chunk)
-                    augmented = {
-                        'content': optimized_text,
-                        'metadata': chunk['metadata']
-                    }
-                    augmented['metadata']['original_content'] = chunk['content']
-                else:  # hybrid
-                    augmented = self.contextual_augmenter.augment_chunk(chunk)
+                original_content = chunk['content']
 
-                chunks_with_metadata[i] = augmented
+                if self.augmentation_strategy == "embedding_optimized":
+                    # Stocker la version enrichie pour l'affichage seulement
+                    optimized_text = self.contextual_augmenter.create_embedding_optimized_text(chunk)
+                    chunk['metadata']['display_content'] = optimized_text
+                    chunks_with_metadata[i] = chunk
+                else:
+                    # with_context ou hybrid : construire le header contextuel
+                    augmented = self.contextual_augmenter.augment_chunk(chunk, preserve_original=False)
+                    # Stocker l'augmenté pour l'affichage, restaurer l'original pour l'embedding
+                    augmented['metadata']['display_content'] = augmented['content']
+                    augmented['content'] = original_content
+                    chunks_with_metadata[i] = augmented
 
         result = {
             'file_path': file_path,

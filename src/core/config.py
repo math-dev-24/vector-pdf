@@ -38,6 +38,19 @@ class Settings(BaseSettings):
     pinecone_api_key: Optional[str] = Field(default=None, description="Clé API Pinecone")
     pinecone_region: str = Field(default="us-east-1", description="Région Pinecone")
     pinecone_cloud: str = Field(default="aws", description="Cloud provider Pinecone")
+    namespace_strategy: str = Field(
+        default="by_ai",
+        description="Stratégie de namespace: none (unique), by_file (par fichier), by_folder (par dossier), by_ai (classification IA)"
+    )
+    namespace_prefix: str = Field(default="", description="Préfixe optionnel pour les namespaces auto-générés")
+    namespace_definitions: str = Field(
+        default="",
+        description=(
+            'Namespaces personnalisés au format JSON. '
+            'Exemple: {"Mon label": {"id": "mon_id", "description": "..."}, ...}. '
+            'Si vide, utilise les 3 namespaces par défaut (depannage/dimensionnement/general).'
+        )
+    )
 
     # ===== OpenAI =====
     openai_api_key: Optional[str] = Field(default=None, description="Clé API OpenAI")
@@ -54,7 +67,7 @@ class Settings(BaseSettings):
     # ===== Chunking =====
     chunk_size: int = Field(default=1000, ge=100, description="Taille des chunks en caractères")
     chunk_overlap: int = Field(default=200, ge=0, description="Overlap entre chunks")
-    use_semantic_chunking: bool = Field(default=False, description="Chunking par sections sémantiques (idéal pour docs longs)")
+    use_semantic_chunking: bool = Field(default=True, description="Chunking par sections sémantiques (idéal pour docs longs)")
     use_token_based_chunking: bool = Field(default=True, description="Utiliser chunking basé sur tokens")
     filter_chunk_quality: bool = Field(default=True, description="Filtrer les chunks de faible qualité")
     merge_small_chunks: bool = Field(default=True, description="Fusionner les petits chunks")

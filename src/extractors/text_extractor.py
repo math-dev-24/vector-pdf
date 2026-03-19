@@ -67,32 +67,3 @@ def extract_text_from_pdf(pdf_path: str, output_dir: str = "./OUTPUT", verbose: 
     return str(output_file)
 
 
-def process_native_pdfs(pdf_list: list[dict], output_dir: str = "./OUTPUT") -> list[str]:
-    """
-    Traite tous les PDFs natifs (type='text') d'une liste.
-
-    Args:
-        pdf_list: Liste de dicts avec infos PDF (depuis analyze_pdfs)
-        output_dir: Répertoire de sortie
-
-    Returns:
-        Liste des chemins des fichiers markdown créés
-    """
-    output_files = []
-
-    # Filtrer uniquement les PDFs natifs
-    native_pdfs = [pdf for pdf in pdf_list if pdf['page_type'] == 'text']
-
-    print(f"Traitement de {len(native_pdfs)} PDF(s) natif(s)...\n")
-
-    for pdf_info in native_pdfs:
-        try:
-            print(f"Extraction: {pdf_info['path']}")
-            output_file = extract_text_from_pdf(pdf_info['path'], output_dir)
-            output_files.append(output_file)
-            print(f"  → Créé: {output_file}\n")
-        except Exception as e:
-            print(f"  ✗ Erreur: {e}\n")
-
-    print(f"Terminé: {len(output_files)} fichier(s) créé(s)")
-    return output_files

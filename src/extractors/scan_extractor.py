@@ -70,31 +70,3 @@ def extract_text_from_scan(pdf_path: str, output_dir: str = "./OUTPUT", lang: st
     return str(output_file)
 
 
-def process_scanned_pdfs(pdf_list: list[dict], output_dir: str = "./OUTPUT", lang: str = "fra") -> list[str]:
-    """
-    Traite tous les PDFs scannés (type='scan') d'une liste.
-
-    Args:
-        pdf_list: Liste de dicts avec infos PDF
-        output_dir: Répertoire de sortie
-        lang: Langue pour l'OCR (fra=français, eng=anglais)
-
-    Returns:
-        Liste des chemins des fichiers markdown créés
-    """
-    output_files = []
-    scanned_pdfs = [pdf for pdf in pdf_list if pdf['page_type'] == 'scan']
-
-    print(f"Traitement de {len(scanned_pdfs)} PDF(s) scanné(s)...\n")
-
-    for pdf_info in scanned_pdfs:
-        try:
-            print(f"Extraction OCR: {pdf_info['path']}")
-            output_file = extract_text_from_scan(pdf_info['path'], output_dir, lang=lang)
-            output_files.append(output_file)
-            print(f"  → Créé: {output_file}\n")
-        except Exception as e:
-            print(f"  ✗ Erreur: {e}\n")
-
-    print(f"Terminé: {len(output_files)} fichier(s) créé(s)")
-    return output_files
