@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Dict, List
 import fitz  # PyMuPDF
 
+from src.core import ProgressBar
+
 # Seuils pour la détection scan vs texte
 MIN_CHARS_PER_PAGE_TEXT = 80  # Moins = probable scan
 MIN_IMAGE_RATIO_SCAN = 0.5  # Si >50% des pages ont des images full-page = scan
@@ -85,7 +87,7 @@ def analyze_pdf(pdf_path: str) -> Dict:
     }
 
 
-def analyze_pdfs(directory: str) -> List[Dict]:
+def analyze_pdfs(directory: str, verbose: bool = True) -> List[Dict]:
     """
     Analyse tous les PDFs d'un répertoire (récursif).
 
@@ -98,11 +100,14 @@ def analyze_pdfs(directory: str) -> List[Dict]:
     pdf_files = list(Path(directory).rglob("*.pdf"))
 
     results = []
-    for pdf_file in pdf_files:
+    progress = ProgressBar(len(pdf_files), prefix="Analyse PDF", enabled=verbose and len(pdf_files) > 0)
+    for i, pdf_file in enumerate(pdf_files):
         try:
             info = analyze_pdf(str(pdf_file))
             results.append(info)
         except Exception as e:
             print(f"Erreur lors de l'analyse de {pdf_file}: {e}")
+        progress.update(i + 1)
+    progress.finish("✓")
 
     return results

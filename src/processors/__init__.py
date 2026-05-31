@@ -3,7 +3,7 @@ Modules de traitement de texte (nettoyage et chunking).
 """
 
 # Modules de base
-from .text_cleaner import clean_text
+from .text_cleaner import clean_text, clean_markdown_extraction, remove_toc_and_summaries
 from .chunker import chunk_markdown_file, chunk_all_markdown_files
 from .state_manager import StateManager
 
@@ -26,6 +26,8 @@ from .chunk_prioritizer import ChunkPrioritizer
 __all__ = [
     # Base
     'clean_text',
+    'clean_markdown_extraction',
+    'remove_toc_and_summaries',
     'chunk_markdown_file',
     'chunk_all_markdown_files',
     'StateManager',

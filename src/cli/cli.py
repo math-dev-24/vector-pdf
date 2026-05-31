@@ -57,13 +57,13 @@ class CLIApplication:
         print("  2. Structurée (détection automatique des titres)")
         print("  3. PyMuPDF4LLM (optimal pour LLM)")
         
-        choice = input("\nVotre choix (1/2/3, défaut=2): ").strip()
+        choice = input("\nVotre choix (1/2/3, défaut=3): ").strip()
         extraction_modes = {
             "1": ExtractionMode.BASIC,
             "2": ExtractionMode.STRUCTURED,
             "3": ExtractionMode.PYMUPDF4LLM
         }
-        extraction_mode = extraction_modes.get(choice, ExtractionMode.STRUCTURED)
+        extraction_mode = extraction_modes.get(choice, ExtractionMode.PYMUPDF4LLM)
         
         return extraction_mode, pdf_filter
     

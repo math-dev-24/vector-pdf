@@ -50,7 +50,7 @@ class ExtractionConfigDialog(QDialog):
             "Structurée (détection automatique des titres)",
             "PyMuPDF4LLM (optimal pour LLM)",
         ])
-        self.extraction_mode_combo.setCurrentIndex(1)  # Structurée par défaut
+        self.extraction_mode_combo.setCurrentIndex(2)  # PyMuPDF4LLM par défaut
         mode_layout.addWidget(self.extraction_mode_combo)
         mode_group.setLayout(mode_layout)
         layout.addWidget(mode_group)

@@ -45,7 +45,7 @@ class PipelineConfig:
     output_dir: Path
 
     # Extraction
-    extraction_mode: ExtractionMode = ExtractionMode.STRUCTURED
+    extraction_mode: ExtractionMode = ExtractionMode.PYMUPDF4LLM
     pdf_filter: PDFFilter = PDFFilter.ALL
 
     # Chunking

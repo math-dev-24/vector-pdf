@@ -65,9 +65,12 @@ class Settings(BaseSettings):
     mistral_ocr_fallback: bool = Field(default=True, description="Fallback vers Tesseract si Mistral échoue")
 
     # ===== Chunking =====
-    chunk_size: int = Field(default=1000, ge=100, description="Taille des chunks en caractères")
+    chunk_size: int = Field(default=1000, ge=100, description="Taille cible des chunks en caractères")
     chunk_overlap: int = Field(default=200, ge=0, description="Overlap entre chunks")
-    use_semantic_chunking: bool = Field(default=True, description="Chunking par sections sémantiques (idéal pour docs longs)")
+    chunk_min_size: int = Field(default=400, ge=50, description="Taille minimale avant fusion (caractères)")
+    chunk_max_size: int = Field(default=2000, ge=500, description="Taille maximale d'un chunk (caractères)")
+    chunk_max_tokens: int = Field(default=600, ge=100, description="Taille maximale d'un chunk (tokens embedding)")
+    use_semantic_chunking: bool = Field(default=True, description="Chunking par sections (idéal docs techniques)")
     use_token_based_chunking: bool = Field(default=True, description="Utiliser chunking basé sur tokens")
     filter_chunk_quality: bool = Field(default=True, description="Filtrer les chunks de faible qualité")
     merge_small_chunks: bool = Field(default=True, description="Fusionner les petits chunks")
@@ -79,6 +82,14 @@ class Settings(BaseSettings):
     use_multithreading: bool = Field(default=False, description="Activer multithreading pour extraction PDF")
     enable_async: bool = Field(default=True, description="Utiliser async pour les APIs (expérimental)")
     smart_batching: bool = Field(default=True, description="Batch processing intelligent basé sur tokens")
+
+    # ===== Extraction PDF =====
+    pdf_margin_top: float = Field(default=72.0, description="Marge haute (pt) pour ignorer en-têtes de page")
+    pdf_margin_bottom: float = Field(default=72.0, description="Marge basse (pt) pour ignorer pieds de page")
+    pdf_table_strategy: str = Field(
+        default="lines_strict",
+        description="Stratégie de détection des tableaux pymupdf4llm (lines_strict, lines, text)",
+    )
 
     # ===== Logging =====
     log_level: str = Field(default="INFO", description="Niveau de logging")

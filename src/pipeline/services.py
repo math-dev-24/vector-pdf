@@ -5,7 +5,7 @@ Services métier pour le pipeline (logique pure, sans I/O utilisateur).
 from pathlib import Path
 from typing import List, Dict, Optional
 
-from src.core import settings, get_logger, PipelineError, ErrorType
+from src.core import settings, get_logger, PipelineError, ErrorType, ProgressBar
 from src.pdf_analyzer import analyze_pdfs
 from src.extractors import extract_text_from_pdf, extract_text_from_scan
 from src.extractors.text_extractor_v2 import (
@@ -71,11 +71,11 @@ class ExtractionService(IExtractionService):
             Résultat de l'extraction
         """
         if self.verbose:
+            print("\n=== Extraction PDF ===")
             logger.info("Début de l'extraction des PDFs")
             logger.info(f"Mode: {extraction_mode.value}, Filtre: {pdf_filter.value}")
-        
-        # Analyser les PDFs
-        pdf_infos = analyze_pdfs(str(data_dir))
+
+        pdf_infos = analyze_pdfs(str(data_dir), verbose=self.verbose)
         
         if not pdf_infos:
             logger.warning(f"Aucun PDF trouvé dans {data_dir}")
@@ -159,10 +159,13 @@ class ExtractionService(IExtractionService):
             )
         else:
             pdf = text_pdfs[0]
+            progress = ProgressBar(1, prefix="Extraction PDF", enabled=self.verbose)
             try:
                 output_path = extraction_func(pdf['path'], str(output_dir), verbose=self.verbose)
+                progress.finish("✓")
                 return [output_path]
             except Exception as e:
+                progress.finish("✗")
                 raise PipelineError(
                     ErrorType.PDF_EXTRACTION,
                     f"Erreur lors de l'extraction de {pdf['path']}: {e}",
@@ -186,8 +189,9 @@ class ExtractionService(IExtractionService):
         failed_extractions: List[Dict] = []
         use_mistral = settings.use_mistral_ocr
         fallback_enabled = settings.mistral_ocr_fallback
+        progress = ProgressBar(len(scan_pdfs), prefix="OCR scans", enabled=self.verbose)
 
-        for pdf in scan_pdfs:
+        for i, pdf in enumerate(scan_pdfs):
             success = False
             last_error = None
 
@@ -233,6 +237,10 @@ class ExtractionService(IExtractionService):
                 logger.error(f"Échec de l'extraction OCR pour {pdf['path']} (Mistral et Tesseract)")
                 failed_extractions.append({"path": pdf["path"], "error": last_error or "Unknown"})
 
+            progress.update(i + 1)
+
+        progress.finish("✓" if not failed_extractions else f"⚠ {len(failed_extractions)} échec(s)")
+
         return output_files, failed_extractions
 
 
@@ -247,9 +255,18 @@ class ChunkingService(IChunkingService):
         from src.processors.chunk_merger import ChunkMerger
         from src.processors.chunk_prioritizer import ChunkPrioritizer
         
-        self.token_chunker = TokenBasedChunker()
-        self.quality_filter = ChunkQualityFilter()
-        self.merger = ChunkMerger()
+        self.token_chunker = TokenBasedChunker(
+            chunk_size_tokens=settings.chunk_max_tokens,
+            chunk_overlap_tokens=min(settings.chunk_overlap // 2, 100),
+        )
+        self.quality_filter = ChunkQualityFilter(
+            min_length=settings.chunk_min_size // 2,
+            max_length=settings.chunk_max_size,
+        )
+        self.merger = ChunkMerger(
+            min_chunk_size=settings.chunk_min_size,
+            max_chunk_size=settings.chunk_max_size,
+        )
         self.prioritizer = ChunkPrioritizer()
     
     def chunk(
@@ -284,6 +301,7 @@ class ChunkingService(IChunkingService):
         use_semantic = settings.use_semantic_chunking
         
         if self.verbose:
+            print("\n=== Chunking ===")
             logger.info(f"Début du chunking (mode: {chunking_mode.value})")
             logger.info(f"Optimisations: token_based={use_token_based}, filter={filter_quality}, merge={merge_small}, semantic={use_semantic}")
         
@@ -320,37 +338,60 @@ class ChunkingService(IChunkingService):
         
         initial_count = len(all_chunks)
         
-        # OPTIMISATIONS
-        
+        if self.verbose:
+            print("\n=== Post-traitement chunks ===")
+
         # 1. Ajouter token_count aux métadonnées
         if use_token_based:
-            if self.verbose:
-                logger.info("Calcul des tokens pour chaque chunk...")
-            for chunk in all_chunks:
+            max_tokens = settings.chunk_max_tokens
+            token_progress = ProgressBar(len(all_chunks), prefix="Calcul tokens", enabled=self.verbose)
+            for i, chunk in enumerate(all_chunks):
                 content = chunk.get('content', '')
                 token_count = self.token_chunker.get_token_count(content)
                 chunk['metadata']['token_count'] = token_count
+                if token_count > max_tokens:
+                    chunk['metadata']['oversized'] = True
+                token_progress.update(i + 1)
+            token_progress.finish("✓")
         
         # 2. Fusionner les petits chunks
         if merge_small:
             if self.verbose:
-                logger.info("Fusion des petits chunks...")
+                print("  Fusion des petits chunks...")
             all_chunks = self.merger.merge_chunks(all_chunks)
             if self.verbose:
-                logger.info(f"  {initial_count} → {len(all_chunks)} chunks après fusion")
+                print(f"  {initial_count} → {len(all_chunks)} chunks après fusion")
+
+        # 2b. Re-découper les chunks trop longs (tokens)
+        if use_token_based:
+            before_rechunk = len(all_chunks)
+            rechunk_progress = ProgressBar(before_rechunk, prefix="Re-découpage", enabled=self.verbose)
+            all_chunks = self.token_chunker.rechunk_with_tokens(
+                all_chunks,
+                max_tokens_per_chunk=settings.chunk_max_tokens,
+                progress=rechunk_progress,
+            )
+            if self.verbose and len(all_chunks) != before_rechunk:
+                print(f"  {before_rechunk} → {len(all_chunks)} chunks (max {settings.chunk_max_tokens} tokens)")
         
         # 3. Filtrer les chunks de faible qualité
         filtered_count = 0
         if filter_quality:
-            if self.verbose:
-                logger.info("Filtrage de la qualité des chunks...")
-            all_chunks, filtered = self.quality_filter.filter_chunks(
-                all_chunks,
-                min_quality=settings.min_chunk_quality
-            )
+            filter_progress = ProgressBar(len(all_chunks), prefix="Filtre qualité", enabled=self.verbose)
+            kept, filtered = [], []
+            for i, chunk in enumerate(all_chunks):
+                score = self.quality_filter.score_chunk(chunk)
+                chunk['metadata']['quality_score'] = score
+                if score >= settings.min_chunk_quality:
+                    kept.append(chunk)
+                else:
+                    filtered.append(chunk)
+                filter_progress.update(i + 1)
+            filter_progress.finish("✓")
+            all_chunks = kept
             filtered_count = len(filtered)
             if self.verbose and filtered:
-                logger.info(f"  {filtered_count} chunks filtrés (qualité < {settings.min_chunk_quality})")
+                print(f"  {filtered_count} chunks filtrés (qualité < {settings.min_chunk_quality})")
         
         # 4. Prioriser les chunks
         if settings.prioritize_chunks:
@@ -404,6 +445,7 @@ class EmbeddingService(IEmbeddingService):
             Résultat de la vectorisation
         """
         if self.verbose:
+            print("\n=== Vectorisation ===")
             logger.info("Début de la vectorisation")
         
         model = model or settings.embedding_model
@@ -477,6 +519,7 @@ class StorageService(IStorageService):
             Résultat du stockage avec stats par namespace
         """
         if self.verbose:
+            print("\n=== Stockage Pinecone ===")
             if namespace_strategy == NamespaceStrategy.NONE:
                 logger.info(f"Stockage dans Pinecone (namespace: {namespace or 'default'})")
             else:

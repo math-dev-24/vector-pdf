@@ -14,7 +14,8 @@ from src.core import (
     PipelineError,
     ErrorType,
     settings,
-    retry_with_backoff
+    retry_with_backoff,
+    ProgressBar,
 )
 from src.core.cache import get_embedding_cache
 
@@ -209,7 +210,8 @@ def embed_chunks(
     model: Optional[str] = None,
     batch_size: Optional[int] = None,
     verbose: bool = True,
-    max_workers: Optional[int] = None
+    max_workers: Optional[int] = None,
+    progress: Optional[ProgressBar] = None,
 ) -> List[Dict]:
     """
     Crée des embeddings pour des chunks avec leurs métadonnées.
@@ -257,6 +259,9 @@ def embed_chunks(
     # Traiter les batches en parallèle
     embeddings_by_batch = {}
     detected_dimension = None
+    embedded_count = 0
+    own_progress = progress is None and verbose
+    bar = progress or ProgressBar(len(texts), prefix="Embeddings", enabled=own_progress)
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         # Soumettre tous les jobs
@@ -272,13 +277,18 @@ def embed_chunks(
             try:
                 batch_embeddings, dimension = future.result()
                 embeddings_by_batch[batch_num] = batch_embeddings
+                embedded_count += len(batch_embeddings)
+                bar.update(embedded_count)
                 
                 # Capturer la dimension détectée
                 if detected_dimension is None:
                     detected_dimension = dimension
 
                 if verbose:
-                    logger.info(f"Batch {batch_num + 1}/{num_batches}: {len(batch_embeddings)} embeddings créés")
+                    logger.debug(
+                        f"Batch {batch_num + 1}/{num_batches}: "
+                        f"{len(batch_embeddings)} embeddings créés"
+                    )
             except Exception as e:
                 if verbose:
                     logger.error(f"Batch {batch_num + 1}/{num_batches}: Erreur: {e}")
@@ -287,6 +297,9 @@ def embed_chunks(
                     f"Erreur lors du traitement du batch {batch_num + 1}: {e}",
                     original_error=e
                 )
+
+    if own_progress:
+        bar.finish("✓")
 
     # Reconstituer les embeddings dans l'ordre
     embeddings = []
@@ -315,7 +328,8 @@ async def embed_chunks_async(
     chunks_data: List[Dict],
     model: Optional[str] = None,
     batch_size: Optional[int] = None,
-    verbose: bool = True
+    verbose: bool = True,
+    progress: Optional[ProgressBar] = None,
 ) -> List[Dict]:
     """
     Version asynchrone de embed_chunks.
@@ -345,19 +359,22 @@ async def embed_chunks_async(
 
     embeddings_by_batch = {}
     detected_dimension = None
+    embedded_count = 0
+    own_progress = progress is None and verbose
+    bar = progress or ProgressBar(len(texts), prefix="Embeddings", enabled=own_progress)
 
     async def _process_batch(batch_num: int, batch_texts: List[str]) -> None:
-        nonlocal detected_dimension
+        nonlocal detected_dimension, embedded_count
         batch_embeddings, dimension = await create_embeddings_async(
             batch_texts,
             model,
             batch_size
         )
         embeddings_by_batch[batch_num] = batch_embeddings
+        embedded_count += len(batch_embeddings)
+        bar.update(embedded_count)
         if detected_dimension is None:
             detected_dimension = dimension
-        if verbose:
-            logger.info(f"Batch async {batch_num + 1}/{num_batches}: {len(batch_embeddings)} embeddings créés")
 
     tasks = [_process_batch(batch_num, batch_texts) for batch_num, batch_texts in batches]
 
@@ -371,6 +388,9 @@ async def embed_chunks_async(
             f"Erreur lors du traitement async: {e}",
             original_error=e
         )
+
+    if own_progress:
+        bar.finish("✓")
 
     # Reconstituer les embeddings dans l'ordre
     embeddings = []
@@ -430,12 +450,12 @@ def embed_all_files(
     if verbose:
         logger.info(f"Total de chunks à vectoriser: {total_chunks}")
 
-    # Collecter tous les chunks de tous les fichiers
     all_chunks = []
     for result in results:
         all_chunks.extend(result['chunks'])
 
-    # Utiliser smart batching si activé
+    chunk_progress = ProgressBar(total_chunks, prefix="Embeddings", enabled=verbose)
+
     if use_smart_batching:
         from src.vectorization.smart_batching import SmartBatcher
         batcher = SmartBatcher()
@@ -444,48 +464,36 @@ def embed_all_files(
         if verbose:
             stats = batcher.get_batch_stats(smart_batches)
             logger.info(f"Smart batching: {stats['num_batches']} batch(s) créé(s)")
-            logger.info(f"  Moyenne: {stats['avg_batch_size']:.1f} chunks/batch, "
-                       f"{stats['avg_tokens_per_batch']:.0f} tokens/batch")
-        
-        # Traiter chaque smart batch
+
         enriched_chunks = []
-        for i, smart_batch in enumerate(smart_batches, 1):
-            if verbose:
-                logger.info(f"Traitement du batch intelligent {i}/{len(smart_batches)} "
-                           f"({len(smart_batch)} chunks)")
-            
+        for smart_batch in smart_batches:
             if use_async:
                 batch_enriched = asyncio.run(
                     embed_chunks_async(
                         smart_batch,
                         model=model,
                         batch_size=batch_size,
-                        verbose=verbose
+                        verbose=False,
                     )
                 )
             else:
                 batch_enriched = embed_chunks(
                     smart_batch,
                     model=model,
-                    batch_size=batch_size,  # Utiliser batch_size pour les appels API
-                    verbose=verbose
+                    batch_size=batch_size,
+                    verbose=False,
                 )
             enriched_chunks.extend(batch_enriched)
+            chunk_progress.update(len(enriched_chunks))
     else:
-        # Traitement standard
-        if verbose:
-            num_batches = (len(all_chunks) - 1) // batch_size + 1
-            logger.info(f"Taille des batchs: {batch_size}")
-            logger.info(f"Vectorisation en cours ({num_batches} batch(s) à traiter)")
-
-        # Créer les embeddings
         if use_async:
             enriched_chunks = asyncio.run(
                 embed_chunks_async(
                     all_chunks,
                     model=model,
                     batch_size=batch_size,
-                    verbose=verbose
+                    verbose=False,
+                    progress=chunk_progress,
                 )
             )
         else:
@@ -493,8 +501,11 @@ def embed_all_files(
                 all_chunks,
                 model=model,
                 batch_size=batch_size,
-                verbose=verbose
+                verbose=False,
+                progress=chunk_progress,
             )
+
+    chunk_progress.finish("✓")
 
     # Réorganiser par fichier (seulement si plusieurs fichiers)
     if len(results) > 1:

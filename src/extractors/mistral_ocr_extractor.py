@@ -190,8 +190,8 @@ def extract_text_with_mistral_ocr(
         markdown_content = result['text']
         
         # Nettoyer le texte (moins agressif que pour OCR classique)
-        from src.processors.text_cleaner import clean_text
-        cleaned_content = clean_text(markdown_content, is_ocr=False)
+        from src.processors.text_cleaner import clean_markdown_extraction
+        cleaned_content = clean_markdown_extraction(markdown_content, is_ocr=False)
         
         # Sauvegarder
         with open(output_file, "w", encoding="utf-8") as f:

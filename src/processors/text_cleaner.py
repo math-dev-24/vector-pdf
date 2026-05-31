@@ -5,6 +5,219 @@ Améliore la qualité des données avant chunking et vectorisation.
 
 import re
 import unicodedata
+from typing import Literal
+
+CleanProfile = Literal["default", "markdown"]
+
+_ROMAN_NUMERAL_RE = re.compile(r"^[IVXLCDM]+$")
+_TOC_START_PATTERNS = [
+    r"^Table\s+des\s+matières\s*$",
+    r"^\*\*Table\s+des\s+matières\*\*\s*$",
+    r"^Sommaire\s*$",
+    r"^\*\*Sommaire\*\*\s*$",
+    r"^Sommaire\s+(?:général|détaillé|technique)\s*$",
+    r"^\*\*Sommaire\s+(?:général|détaillé|technique)\*\*\s*$",
+    r"^Table\s+of\s+contents\s*$",
+    r"^Contents\s*$",
+    r"^Index\s+des\s+matières\s*$",
+    r"^\*\*Index\s+des\s+matières\*\*\s*$",
+    r"^Plan\s+(?:du|de\s+la)\s+(?:document|ouvrage|livre|manuel)\s*$",
+]
+_TOC_END_PATTERNS = [
+    r"^#{1,6}\s+\*\*",
+    r"^#{1,6}\s+\d",
+    r"^#{1,6}\s+[A-ZÀ-Ü]",
+]
+_TOC_CHAPTER_ENTRY_RE = re.compile(
+    r"^\*\*\d+\s*(?:•\s*)?(?:\*\*)?.+\*\*\s*\d+\s*\*\*\s*$"
+)
+_TOC_SECTION_ENTRY_RE = re.compile(
+    r"^\d+\.\d+\s+\S.+?\s+\d{1,3}$"
+)
+_TOC_PAGE_REF_RE = re.compile(
+    r"^\*\*.+\*\*\s+\*\*(?:[IVXLCDM]+|\d{1,4})\s*\*\*\s*$"
+)
+_TOC_DOTTED_LEADER_RE = re.compile(r"\.{3,}\s*\d{1,4}\s*$")
+_TOC_CONVERSION_TABLE_RE = re.compile(
+    r"^\*\*Tables\s+de\s+conversion\*\*",
+    re.IGNORECASE,
+)
+_TOC_KNOWN_HEADERS = frozenset({
+    "table des matières",
+    "sommaire",
+    "sommaire général",
+    "sommaire détaillé",
+    "sommaire technique",
+    "table of contents",
+    "contents",
+    "index des matières",
+})
+
+
+def _is_toc_header_line(line: str) -> bool:
+    """Détecte un titre de table des matières / sommaire."""
+    stripped = line.strip()
+    if not stripped:
+        return False
+    for pattern in _TOC_START_PATTERNS:
+        if re.match(pattern, stripped, re.IGNORECASE):
+            return True
+    normalized = re.sub(r"\*+", "", stripped).strip().lower()
+    return normalized in _TOC_KNOWN_HEADERS
+
+
+def _is_content_section_heading(line: str) -> bool:
+    """Titres markdown réels marquant le début du contenu (fin du sommaire)."""
+    stripped = line.strip()
+    if not re.match(r"^#{1,6}\s+", stripped):
+        return False
+    if _TOC_PAGE_REF_RE.match(stripped):
+        return False
+    return True
+
+
+def _is_toc_entry_line(line: str) -> bool:
+    """Détecte une ligne typique de table des matières (livres techniques)."""
+    stripped = line.strip()
+    if not stripped or stripped.startswith("#"):
+        return False
+    if _is_toc_header_line(line):
+        return True
+    if _TOC_CHAPTER_ENTRY_RE.match(stripped):
+        return True
+    if _TOC_SECTION_ENTRY_RE.match(stripped):
+        return True
+    if _TOC_PAGE_REF_RE.match(stripped):
+        return True
+    if _TOC_DOTTED_LEADER_RE.search(stripped):
+        return True
+    if _TOC_CONVERSION_TABLE_RE.match(stripped):
+        return True
+    if re.match(r"^\*\*(?:Annexe|Index|Bibliographie)\b", stripped, re.IGNORECASE):
+        return True
+    if (
+        re.search(r"\s\d{1,3}$", stripped)
+        and len(stripped) < 90
+        and not stripped.endswith(".")
+        and re.match(r"^(?:\d+\.\d+|\d+\s*•|[a-zà-ü])", stripped, re.IGNORECASE)
+    ):
+        return True
+    return False
+
+
+def _remove_toc_runs(text: str) -> str:
+    """Supprime les blocs de sommaire isolés (y compris sur plusieurs pages PDF)."""
+    lines = text.split("\n")
+    result: list[str] = []
+    i = 0
+
+    while i < len(lines):
+        if not (_is_toc_header_line(lines[i]) or _is_toc_entry_line(lines[i])):
+            result.append(lines[i])
+            i += 1
+            continue
+
+        j = i
+        toc_count = 0
+        while j < len(lines):
+            stripped = lines[j].strip()
+            if not stripped:
+                j += 1
+                continue
+            if _is_content_section_heading(lines[j]):
+                break
+            if _is_toc_header_line(lines[j]) or _is_toc_entry_line(lines[j]):
+                toc_count += 1
+                j += 1
+                continue
+            if toc_count > 0 and len(stripped) < 90 and re.search(r"\s\d{1,3}$", stripped):
+                toc_count += 1
+                j += 1
+                continue
+            break
+
+        if toc_count >= 1 and (
+            _is_toc_header_line(lines[i]) or toc_count >= 2
+        ):
+            i = j
+            continue
+
+        result.append(lines[i])
+        i += 1
+
+    return "\n".join(result)
+
+
+def remove_toc_and_summaries(text: str) -> str:
+    """
+    Supprime tables des matières, sommaires et renvois paginés (inutiles pour RAG).
+    Gère les sommaires multi-pages éparpillés dans le PDF.
+    """
+    lines = text.split("\n")
+    cleaned: list[str] = []
+    in_toc = False
+
+    for line in lines:
+        stripped = line.strip()
+
+        if _is_content_section_heading(line):
+            in_toc = False
+            cleaned.append(line)
+            continue
+
+        if _is_toc_header_line(line) or _is_toc_entry_line(line):
+            in_toc = True
+            continue
+
+        if in_toc:
+            if stripped and len(stripped) > 100 and stripped.endswith("."):
+                in_toc = False
+                cleaned.append(line)
+            continue
+
+        cleaned.append(line)
+
+    return _remove_toc_runs("\n".join(cleaned))
+
+
+def remove_table_of_contents(text: str) -> str:
+    """Alias conservé pour compatibilité."""
+    return remove_toc_and_summaries(text)
+
+
+def remove_scattered_toc_entries(text: str) -> str:
+    """Alias conservé pour compatibilité."""
+    return remove_toc_and_summaries(text)
+
+
+def fix_pdf_artifacts(text: str) -> str:
+    """
+    Corrige les artefacts courants des PDFs techniques (caractères invisibles,
+    exposants pymupdf4llm, césures logicielles).
+    """
+    text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", text)
+    text = text.replace("\u00ad", "")
+    text = re.sub(r"[\u200b-\u200d\ufeff]", "", text)
+    text = re.sub(r"(\d+)\s*\[e\]", r"\1e", text, flags=re.IGNORECASE)
+    text = re.sub(r"\*\*(\w+)\*\*\s*\*\*\[2\]\*\*", r"\1²", text)
+    text = re.sub(r"\*\*(\w+)\*\*\s*\*\*\[3\]\*\*", r"\1³", text)
+    text = re.sub(r"(\w)\s*\[2\]", r"\1²", text)
+    text = re.sub(r"(\w)\s*\[3\]", r"\1³", text)
+    return text
+
+
+def _is_false_heading(line: str) -> bool:
+    """Évite de promouvoir numéros romains, ISBN ou lignes déjà structurées."""
+    stripped = line.strip()
+    if not stripped:
+        return True
+    if stripped.startswith("#") or "**" in stripped:
+        return True
+    if _ROMAN_NUMERAL_RE.match(stripped):
+        return True
+    if re.search(r"\d", stripped):
+        return True
+    return False
 
 
 def remove_page_numbers(text: str) -> str:
@@ -92,67 +305,6 @@ def remove_update_dates(text: str) -> str:
                 break
 
         if not is_update:
-            cleaned_lines.append(line)
-
-    return '\n'.join(cleaned_lines)
-
-
-def remove_table_of_contents(text: str) -> str:
-    """
-    Supprime les tables des matières et sommaires.
-    """
-    lines = text.split('\n')
-
-    # Patterns pour détecter le début d'une table des matières
-    toc_start_patterns = [
-        r'^Table\s+des\s+matières\s*$',
-        r'^Sommaire\s*$',
-        r'^Table\s+of\s+contents\s*$',
-        r'^Contents\s*$',
-    ]
-
-    in_toc = False
-    toc_start_idx = -1
-    cleaned_lines = []
-
-    for i, line in enumerate(lines):
-        stripped = line.strip()
-
-        # Détecter le début d'une table des matières
-        if not in_toc:
-            for pattern in toc_start_patterns:
-                if re.match(pattern, stripped, re.IGNORECASE):
-                    in_toc = True
-                    toc_start_idx = i
-                    break
-
-        # Si dans une table des matières, chercher la fin
-        if in_toc:
-            # La ToC se termine généralement quand on arrive à du contenu avec des paragraphes
-            # ou un titre de section (###)
-
-            # Détecter les lignes typiques de ToC (avec points et numéros de page)
-            is_toc_line = bool(re.search(r'\.{3,}', stripped))  # Lignes avec ...
-            is_page_indicator = bool(re.match(r'^Page\s*$', stripped, re.IGNORECASE))
-            is_short_numbered = bool(re.match(r'^\d+\s*$', stripped))  # Juste un numéro
-
-            # Continuer à skip si c'est une ligne de ToC typique ou vide
-            if is_toc_line or is_page_indicator or is_short_numbered or not stripped:
-                continue
-
-            # Si on trouve un titre markdown (###) ou un paragraphe long, la ToC est finie
-            if stripped.startswith('###') or (len(stripped) > 80 and '.' in stripped):
-                in_toc = False
-                cleaned_lines.append(line)
-                continue
-
-            # Si on a avancé de plus de 30 lignes depuis le début, considérer que la ToC est finie
-            if i - toc_start_idx > 30:
-                in_toc = False
-                cleaned_lines.append(line)
-                continue
-
-        else:
             cleaned_lines.append(line)
 
     return '\n'.join(cleaned_lines)
@@ -612,12 +764,15 @@ def improve_markdown_structure(text: str) -> str:
     for i, line in enumerate(lines):
         stripped = line.strip()
 
-        # Détecter titres en MAJUSCULES (sauf s'ils sont déjà en markdown)
-        if stripped and stripped.isupper() and len(stripped.split()) <= 15:
-            if not stripped.startswith('#'):
-                # Transformer en titre niveau 3
-                improved_lines.append(f"\n### {stripped}\n")
-                continue
+        # Détecter titres en MAJUSCULES (sauf faux positifs : ISBN, numéros romains…)
+        if (
+            stripped
+            and stripped.isupper()
+            and len(stripped.split()) <= 15
+            and not _is_false_heading(stripped)
+        ):
+            improved_lines.append(f"\n### {stripped}\n")
+            continue
 
         improved_lines.append(line)
 
@@ -650,11 +805,32 @@ def improve_markdown_structure(text: str) -> str:
     return '\n'.join(merged_lines)
 
 
+def clean_markdown_extraction(text: str, is_ocr: bool = False) -> str:
+    """
+    Nettoyage léger pour sorties pymupdf4llm / markdown déjà structuré.
+    Préserve titres, formules et paragraphes ; retire surtout le bruit PDF.
+    """
+    text = fix_pdf_artifacts(text)
+    text = fix_hyphenated_words(text)
+    text = remove_page_numbers(text)
+    text = remove_toc_and_summaries(text)
+    text = remove_copyright_notices(text)
+    text = remove_unknown_characters(text, keep_common_symbols=True)
+
+    if is_ocr:
+        text = remove_ocr_artifacts(text)
+
+    text = normalize_whitespace(text)
+    text = normalize_headings(text)
+    return text.strip()
+
+
 def clean_text(
         text: str,
         is_ocr: bool = False,
         remove_repetitive: bool = True,
-        clean_emojis: bool = True
+        clean_emojis: bool = True,
+        profile: CleanProfile = "default",
 ) -> str:
     """
     Applique tous les nettoyages sur le texte.
@@ -664,10 +840,15 @@ def clean_text(
         is_ocr: True si le texte provient d'OCR (nettoyage plus agressif)
         remove_repetitive: Supprimer le contenu répétitif (headers/footers)
         clean_emojis: Nettoyer les emojis et caractères inconnus
+        profile: "default" pour extracteurs basiques, "markdown" pour pymupdf4llm
 
     Returns:
         Texte nettoyé
     """
+    if profile == "markdown":
+        return clean_markdown_extraction(text, is_ocr=is_ocr)
+
+    text = fix_pdf_artifacts(text)
     # Réparer les césures AVANT tout autre traitement
     text = fix_hyphenated_words(text)
 
@@ -675,7 +856,7 @@ def clean_text(
     text = remove_page_numbers(text)
     text = remove_figure_references(text)
     text = remove_update_dates(text)
-    text = remove_table_of_contents(text)
+    text = remove_toc_and_summaries(text)
 
     # Supprimer emails, URLs et mentions de droits
     text = remove_emails(text)

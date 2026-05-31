@@ -13,6 +13,7 @@ import re
 import unicodedata
 from typing import List, Dict, Tuple
 from src.core import OpenAIClient, get_logger, settings
+from src.core.progress import ProgressBar
 
 logger = get_logger(__name__)
 
@@ -163,7 +164,8 @@ def classify_chunks(
     if verbose:
         print(f"\n=== Classification IA des namespaces ===")
         print(f"Modèle : {model} | Chunks : {total} | Batch : {batch_size}")
-        print(f"Namespaces : {list(valid_namespaces)}")
+
+    progress = ProgressBar(total, prefix="Classification", enabled=verbose)
 
     for batch_start in range(0, total, batch_size):
         batch = chunks[batch_start : batch_start + batch_size]
@@ -171,14 +173,14 @@ def classify_chunks(
             client, batch, model, system_prompt, label_to_ns, valid_namespaces, fallback_ns
         )
         results.extend(batch_labels)
+        progress.update(min(batch_start + batch_size, total))
 
-        if verbose:
-            done = min(batch_start + batch_size, total)
-            print(f"  [{done}/{total}] classifiés", end="\r")
+    progress.finish("✓")
 
     if verbose:
-        print()
-        _print_distribution(results, total, valid_namespaces)
+        from collections import Counter
+        counts = Counter(results)
+        print(f"  Répartition : {dict(counts)}")
 
     return results
 

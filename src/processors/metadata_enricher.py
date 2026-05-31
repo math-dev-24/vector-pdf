@@ -9,7 +9,7 @@ import json
 from typing import Dict, List
 from openai import OpenAI
 
-from src.core import get_logger
+from src.core import get_logger, ProgressBar
 
 logger = get_logger(__name__)
 
@@ -131,26 +131,20 @@ class MetadataEnricher:
         # Tronquer si trop long
         text_sample = text[:max_length] if len(text) > max_length else text
 
-        prompt = f"""Analyse ce texte et extrais les informations suivantes au format JSON:
+        prompt = f"""Analyse ce texte technique et extrais les informations au format JSON.
 
 {text_sample}
 
-Retourne UNIQUEMENT un JSON valide avec cette structure (pas de markdown, pas d'explication):
+Retourne UNIQUEMENT un JSON valide (pas de markdown):
 {{
-  "keywords": ["mot-clé1", "mot-clé2", "mot-clé3"],
-  "entities": {{
-    "persons": ["personne1", "personne2"],
-    "organizations": ["org1", "org2"],
-    "locations": ["lieu1", "lieu2"],
-    "dates": ["date1", "date2"]
-  }},
+  "keywords": ["mot1", "mot2"],
   "topics": ["sujet1", "sujet2"],
-  "document_type": "type de document (rapport, facture, contrat, article, etc.)",
-  "language": "code langue (fr, en, etc.)",
-  "summary": "résumé en 1 phrase courte"
+  "document_type": "manuel|rapport|procedure|autre",
+  "language": "fr",
+  "summary": "résumé en une phrase courte sans guillemets"
 }}
 
-Limites: max 5 par catégorie. Si aucune info, retourne liste vide []."""
+Max 5 keywords, max 3 topics. Listes vides [] si rien trouvé."""
 
         try:
             response = self.client.chat.completions.create(
@@ -158,51 +152,96 @@ Limites: max 5 par catégorie. Si aucune info, retourne liste vide []."""
                 messages=[
                     {
                         "role": "system",
-                        "content": "Tu es un expert en extraction d'information. Réponds UNIQUEMENT avec du JSON valide, sans markdown ni texte explicatif. Ne mets JAMAIS de virgule en fin de ligne avant } ou ]."
+                        "content": (
+                            "Tu extrais des métadonnées structurées. "
+                            "Réponds UNIQUEMENT avec du JSON valide, compact, sans markdown."
+                        ),
+                    },
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.0,
+                max_tokens=800,
+                response_format={"type": "json_object"},
+            )
+
+            content = (response.choices[0].message.content or "").strip()
+            metadata = self._parse_ai_json(content)
+            if metadata:
+                return metadata
+
+            # Retry une fois avec un prompt minimal si échec (JSON tronqué ou invalide)
+            return self._extract_with_ai_retry(text_sample)
+
+        except Exception as e:
+            logger.debug(f"Erreur extraction IA: {e}")
+            return {}
+
+    def _parse_ai_json(self, content: str) -> Dict:
+        """Parse le JSON renvoyé par l'IA avec réparations légères."""
+        if not content:
+            return {}
+
+        # JSON mode OpenAI : parser directement sans nettoyage agressif
+        try:
+            parsed = json.loads(content)
+            return parsed if isinstance(parsed, dict) else {}
+        except json.JSONDecodeError:
+            pass
+
+        cleaned = content
+        cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
+        cleaned = re.sub(r"\s*```$", "", cleaned)
+        cleaned = re.sub(r",\s*([}\]])", r"\1", cleaned)
+
+        try:
+            parsed = json.loads(cleaned)
+            return parsed if isinstance(parsed, dict) else {}
+        except json.JSONDecodeError:
+            pass
+
+        # Extraire le bloc JSON principal
+        start, end = cleaned.find("{"), cleaned.rfind("}")
+        if start != -1 and end > start:
+            fragment = cleaned[start : end + 1]
+            fragment = re.sub(r",\s*([}\]])", r"\1", fragment)
+            try:
+                parsed = json.loads(fragment)
+                return parsed if isinstance(parsed, dict) else {}
+            except json.JSONDecodeError as err:
+                if not fragment.rstrip().endswith("}"):
+                    logger.debug(f"JSON IA probablement tronqué ({err})")
+                else:
+                    logger.debug(f"JSON IA invalide ({err}): {fragment[:120]}...")
+
+        return {}
+
+    def _extract_with_ai_retry(self, text: str) -> Dict:
+        """Second essai avec un schéma minimal."""
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "Réponds uniquement en JSON compact valide.",
                     },
                     {
                         "role": "user",
-                        "content": prompt
-                    }
+                        "content": (
+                            f"Extrais keywords (max 3) et topics (max 2) de ce texte:\n\n"
+                            f"{text[:1200]}\n\n"
+                            'Format: {"keywords":[],"topics":[],"summary":""}'
+                        ),
+                    },
                 ],
-                temperature=0.1,
-                max_tokens=500,
-                response_format={"type": "json_object"}  # Force JSON valide
+                temperature=0.0,
+                max_tokens=300,
+                response_format={"type": "json_object"},
             )
-
-            content = response.choices[0].message.content.strip()
-
-            # Nettoyer le markdown si présent
-            content = re.sub(r'^```json\s*', '', content)
-            content = re.sub(r'\s*```$', '', content)
-            content = re.sub(r'^```\s*', '', content)  # Aussi pour ``` sans json
-
-            # Nettoyer les virgules en fin de ligne (trailing commas)
-            # Remplacer les virgules suivies d'un saut de ligne et d'un } ou ]
-            content = re.sub(r',\s*\n\s*([}\]])', r'\1', content)
-            # Remplacer les virgules juste avant } ou ]
-            content = re.sub(r',\s*([}\]])', r'\1', content)
-
-            try:
-                metadata = json.loads(content)
-            except json.JSONDecodeError as json_err:
-                # Tentative de réparation supplémentaire
-                # Supprimer les commentaires JSON (non standard mais parfois présents)
-                content = re.sub(r'//.*?$', '', content, flags=re.MULTILINE)
-                content = re.sub(r'/\*.*?\*/', '', content, flags=re.DOTALL)
-                
-                try:
-                    metadata = json.loads(content)
-                except json.JSONDecodeError:
-                    # Si ça échoue encore, essayer d'extraire juste les parties valides
-                    logger.warning(f"Erreur parsing JSON après nettoyage: {json_err}")
-                    logger.debug(f"Contenu problématique: {content[:200]}...")
-                    return {}
-
-            return metadata
-
+            content = (response.choices[0].message.content or "").strip()
+            return self._parse_ai_json(content)
         except Exception as e:
-            logger.warning(f"Erreur extraction IA: {e}")
+            logger.debug(f"Retry extraction IA échoué: {e}")
             return {}
 
     def detect_content_features(self, text: str) -> Dict[str, bool]:
@@ -317,12 +356,13 @@ Limites: max 5 par catégorie. Si aucune info, retourne liste vide []."""
         # Features du contenu
         enriched.update(self.detect_content_features(text))
 
-        # Extraction IA (optionnel)
+        # Extraction IA (optionnel) — les métadonnées basiques restent disponibles si échec
         if use_ai_extraction and self.use_ai:
             ai_metadata = self.extract_with_ai(text)
             if ai_metadata:
                 enriched['keywords_ai'] = ai_metadata.get('keywords', [])
-                enriched['entities_ai'] = ai_metadata.get('entities', {})
+                if ai_metadata.get('entities'):
+                    enriched['entities_ai'] = ai_metadata['entities']
                 enriched['topics'] = ai_metadata.get('topics', [])
                 enriched['document_type'] = ai_metadata.get('document_type', 'unknown')
                 enriched['language'] = ai_metadata.get('language', 'unknown')
@@ -356,11 +396,10 @@ Limites: max 5 par catégorie. Si aucune info, retourne liste vide []."""
             Chunks avec métadonnées enrichies
         """
         enriched_chunks = []
+        total = len(chunks)
+        progress = ProgressBar(total, prefix="Enrichissement", enabled=verbose)
 
         for i, chunk in enumerate(chunks):
-            if verbose and (i + 1) % 10 == 0:
-                print(f"  Enrichissement: {i+1}/{len(chunks)} chunks traités")
-
             enriched_metadata = self.enrich_chunk_metadata(
                 text=chunk['content'],
                 base_metadata=chunk['metadata'],
@@ -371,9 +410,9 @@ Limites: max 5 par catégorie. Si aucune info, retourne liste vide []."""
                 'content': chunk['content'],
                 'metadata': enriched_metadata
             })
+            progress.update(i + 1)
 
-        if verbose:
-            print(f"  ✅ {len(chunks)} chunks enrichis")
+        progress.finish("✓")
 
         return enriched_chunks
 

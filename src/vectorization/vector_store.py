@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import List, Dict, Optional
 from pinecone import Pinecone, ServerlessSpec
 
-from src.core import settings, get_logger, ConfigurationError
+from src.core import settings, get_logger, ConfigurationError, ProgressBar
 
 logger = get_logger(__name__)
 
@@ -148,13 +148,6 @@ class VectorStore:
             verbose: Afficher la progression
             embedding_version: Version des embeddings (optionnel)
         """
-        if verbose:
-            print(f"\n=== Ajout dans Pinecone ===")
-            print(f"Index: {self.index_name}")
-            print(f"Dimension attendue: {self.dimension}")
-            print(f"Namespace: {namespace if namespace else '(default)'}")
-            print(f"Nombre de chunks: {len(chunks)}\n")
-
         # Préparer les données pour Pinecone
         vectors = []
         validation_errors = []
@@ -218,13 +211,18 @@ class VectorStore:
                     "Tous les embeddings sont invalides"
                 )
 
-        # Upload par batchs
+        if verbose:
+            print(f"\n=== Upload Pinecone ===")
+            print(f"Index: {self.index_name} | Namespace: {namespace or '(default)'} | Vecteurs: {len(vectors)}")
+
+        upload_progress = ProgressBar(len(vectors), prefix="Pinecone", enabled=verbose)
+        uploaded = 0
         for i in range(0, len(vectors), batch_size):
             batch = vectors[i:i + batch_size]
             self.index.upsert(vectors=batch, namespace=namespace)
-
-            if verbose:
-                print(f"  Batch {i//batch_size + 1}/{(len(vectors)-1)//batch_size + 1} uploadé")
+            uploaded += len(batch)
+            upload_progress.update(uploaded)
+        upload_progress.finish("✓")
 
         if verbose:
             # Attendre que les stats se mettent à jour
@@ -290,18 +288,21 @@ class VectorStore:
 
         # Upload chaque groupe dans son namespace
         counts: Dict[str, int] = {}
-        for ns, ns_chunks in sorted(groups.items()):
+        ns_progress = ProgressBar(len(groups), prefix="Namespaces", enabled=verbose)
+        for ns_idx, (ns, ns_chunks) in enumerate(sorted(groups.items()), 1):
             ns_display = ns if ns else "(default)"
             if verbose:
-                print(f"→ Upload namespace '{ns_display}' ({len(ns_chunks)} chunks)...")
+                print(f"→ Upload '{ns_display}' ({len(ns_chunks)} chunks)")
             self.add_chunks(
                 ns_chunks,
                 batch_size=batch_size,
                 namespace=ns,
-                verbose=False,
+                verbose=verbose,
                 embedding_version=embedding_version
             )
             counts[ns_display] = len(ns_chunks)
+            ns_progress.update(ns_idx)
+        ns_progress.finish("✓")
 
         if verbose:
             print(f"\n✓ {len(chunks)} chunks distribués dans {len(groups)} namespace(s)")

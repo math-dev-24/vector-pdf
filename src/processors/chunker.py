@@ -11,6 +11,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
+from src.core import ProgressBar
+
 
 def create_smart_splitter(chunk_size: int = 1000, chunk_overlap: int = 200) -> RecursiveCharacterTextSplitter:
     """
@@ -131,51 +133,39 @@ def chunk_all_markdown_files(
         max_workers = min(32, (os.cpu_count() or 1) + 4)
 
     if verbose:
-        print(f"\n📝 Chunking de {len(md_files)} fichier(s) markdown...")
-        print(f"   Paramètres: chunk_size={chunk_size}, overlap={chunk_overlap}")
-        if len(md_files) > 1:
-            print(f"   Threads: {max_workers}")
-        print()
+        print(f"\n=== Chunking standard ===")
+        print(f"📝 {len(md_files)} fichier(s) | chunk_size={chunk_size}, overlap={chunk_overlap}")
 
     results = []
+    progress = ProgressBar(len(md_files), prefix="Chunking fichiers", enabled=verbose)
 
-    # Traitement parallèle si plusieurs fichiers
     if len(md_files) > 1:
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            # Soumettre tous les jobs
             future_to_file = {
                 executor.submit(chunk_markdown_file, str(md_file), chunk_size, chunk_overlap): md_file
                 for md_file in md_files
             }
 
-            # Traiter les résultats au fur et à mesure
             for i, future in enumerate(as_completed(future_to_file), 1):
                 md_file = future_to_file[future]
-
                 try:
                     result = future.result()
                     results.append(result)
-
-                    if verbose:
-                        print(f"  [{i}/{len(md_files)}] ✅ {md_file.name}: {result['num_chunks']} chunks")
                 except Exception as e:
                     if verbose:
-                        print(f"  [{i}/{len(md_files)}] ❌ {md_file.name}: {e}")
+                        print(f"\n  ❌ {md_file.name}: {e}")
+                progress.update(i)
     else:
-        # Un seul fichier : traitement séquentiel
         md_file = md_files[0]
-        if verbose:
-            print(f"  [1/1] Traitement de {md_file.name}...")
-
         result = chunk_markdown_file(str(md_file), chunk_size, chunk_overlap)
         results.append(result)
+        progress.update(1)
 
-        if verbose:
-            print(f"       ✅ {result['num_chunks']} chunks créés")
+    progress.finish("✓")
 
     if verbose:
         total_chunks = sum(r['num_chunks'] for r in results)
-        print(f"\n✅ Chunking terminé: {total_chunks} chunks au total")
+        print(f"  {total_chunks} chunks au total")
 
     return results
 

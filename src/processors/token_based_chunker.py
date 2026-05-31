@@ -4,7 +4,9 @@ Les modèles d'embedding fonctionnent avec des tokens, pas des caractères.
 """
 
 import tiktoken
-from typing import List, Dict
+from typing import List, Dict, Optional
+
+from src.core import ProgressBar
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from src.core import get_logger
@@ -94,7 +96,8 @@ class TokenBasedChunker:
     def rechunk_with_tokens(
         self,
         chunks: List[Dict],
-        max_tokens_per_chunk: int = 500
+        max_tokens_per_chunk: int = 500,
+        progress: Optional[ProgressBar] = None,
     ) -> List[Dict]:
         """
         Re-chunk une liste de chunks existants selon les tokens.
@@ -102,31 +105,35 @@ class TokenBasedChunker:
         Args:
             chunks: Liste de chunks existants
             max_tokens_per_chunk: Nombre maximum de tokens par chunk
+            progress: Barre de progression optionnelle
             
         Returns:
             Nouveaux chunks basés sur tokens
         """
         rechunked = []
         
-        for chunk in chunks:
+        for i, chunk in enumerate(chunks):
             content = chunk.get('content', '')
             token_count = self.get_token_count(content)
             
-            # Si le chunk est déjà de bonne taille, le garder
             if token_count <= max_tokens_per_chunk:
-                # Ajouter le token_count aux métadonnées
                 chunk['metadata']['token_count'] = token_count
                 rechunked.append(chunk)
             else:
-                # Re-chunker ce chunk trop grand
                 sub_chunks = self.chunk_text(content)
-                for i, sub_chunk in enumerate(sub_chunks):
+                for j, sub_chunk in enumerate(sub_chunks):
                     new_chunk = {
                         'content': sub_chunk,
                         'metadata': chunk['metadata'].copy()
                     }
                     new_chunk['metadata']['token_count'] = self.get_token_count(sub_chunk)
-                    new_chunk['metadata']['chunk_index'] = f"{chunk['metadata'].get('chunk_index', 0)}-{i}"
+                    new_chunk['metadata']['chunk_index'] = f"{chunk['metadata'].get('chunk_index', 0)}-{j}"
                     rechunked.append(new_chunk)
+
+            if progress:
+                progress.update(i + 1)
+
+        if progress:
+            progress.finish("✓")
         
         return rechunked

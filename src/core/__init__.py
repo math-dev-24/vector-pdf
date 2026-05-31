@@ -7,6 +7,7 @@ from .logging_config import setup_logging, get_logger
 from .exceptions import PipelineError, ErrorType, ConfigurationError, ValidationError
 from .singletons import OpenAIClient, PineconeClient, MistralClient
 from .retry import retry_with_backoff
+from .progress import ProgressBar
 
 __all__ = [
     "Settings",
@@ -21,4 +22,5 @@ __all__ = [
     "PineconeClient",
     "MistralClient",
     "retry_with_backoff",
+    "ProgressBar",
 ]

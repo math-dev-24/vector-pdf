@@ -8,18 +8,19 @@ Chunker avancé qui orchestre tous les modules d'amélioration:
 """
 
 import os
-import logging
 from pathlib import Path
 from typing import List, Dict, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-logger = logging.getLogger(__name__)
+from src.core import ProgressBar, get_logger
 
-from .text_cleaner import clean_text
+from .text_cleaner import clean_markdown_extraction
 from .section_detector import SectionDetector
 from .chunking_strategies import AdaptiveChunker, SemanticChunker, ContentTypeDetector
 from .metadata_enricher import MetadataEnricher
 from .contextual_augmenter import ContextualAugmenter
+
+logger = get_logger(__name__)
 
 
 class AdvancedChunker:
@@ -57,9 +58,20 @@ class AdvancedChunker:
         self.enable_context_augmentation = enable_context_augmentation
         self.augmentation_strategy = augmentation_strategy
 
-        # Initialiser les modules
-        self.adaptive_chunker = AdaptiveChunker() if use_adaptive_chunking else None
-        self.semantic_chunker = SemanticChunker() if use_semantic_chunking else None
+        from src.core import settings
+
+        self.adaptive_chunker = (
+            AdaptiveChunker(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+            if use_adaptive_chunking else None
+        )
+        self.semantic_chunker = (
+            SemanticChunker(
+                min_chunk_size=settings.chunk_min_size,
+                max_chunk_size=settings.chunk_max_size,
+                chunk_overlap=chunk_overlap,
+            )
+            if use_semantic_chunking else None
+        )
         self.section_detector = SectionDetector()
         self.metadata_enricher = MetadataEnricher(use_ai=enable_ai_enrichment)
         self.contextual_augmenter = ContextualAugmenter()
@@ -88,9 +100,9 @@ class AdvancedChunker:
 
         original_length = len(text)
 
-        # Nettoyage automatique (détecter si OCR)
+        # Nettoyage léger (l'extraction PDF a déjà nettoyé le markdown)
         is_ocr = 'scan' in file_path.lower() or '_ocr' in file_path.lower()
-        text = clean_text(text, is_ocr=is_ocr)
+        text = clean_markdown_extraction(text, is_ocr=is_ocr)
 
         cleaned_length = len(text)
         reduction_pct = 100 * (1 - cleaned_length / original_length) if original_length > 0 else 0
@@ -208,7 +220,7 @@ class AdvancedChunker:
         chunks_with_metadata = self.metadata_enricher.enrich_batch(
             chunks=chunks_with_metadata,
             use_ai=self.enable_ai_enrichment,
-            verbose=False
+            verbose=verbose,
         )
 
         # 6. Augmentation contextuelle
@@ -218,6 +230,11 @@ class AdvancedChunker:
             if verbose:
                 print(f"  ✨ Augmentation contextuelle ({self.augmentation_strategy})...")
 
+            augment_progress = ProgressBar(
+                len(chunks_with_metadata),
+                prefix="Augmentation",
+                enabled=verbose,
+            )
             for i, chunk in enumerate(chunks_with_metadata):
                 original_content = chunk['content']
 
@@ -233,6 +250,9 @@ class AdvancedChunker:
                     augmented['metadata']['display_content'] = augmented['content']
                     augmented['content'] = original_content
                     chunks_with_metadata[i] = augmented
+
+                augment_progress.update(i + 1)
+            augment_progress.finish("✓")
 
         result = {
             'file_path': file_path,
@@ -320,23 +340,22 @@ def process_all_markdown_files(
     results = []
 
     if max_workers is None:
-        max_workers = min(4, os.cpu_count() or 1)  # Limiter à 4 pour éviter rate limits API
+        max_workers = min(4, os.cpu_count() or 1)
 
-    # Traitement (séquentiel si IA activée pour éviter rate limits)
+    file_progress = ProgressBar(len(md_files), prefix="Chunking avancé", enabled=verbose)
+
     if enable_ai_enrichment or len(md_files) == 1:
-        # Séquentiel
-        for i, md_file in enumerate(md_files, 1):
+        for i, md_file in enumerate(md_files):
             if verbose:
-                print(f"\n[{i}/{len(md_files)}] {md_file.name}")
-
+                print(f"\n→ {md_file.name}")
             try:
                 result = chunker.process_markdown_file(str(md_file), verbose=verbose)
                 results.append(result)
             except Exception as e:
                 if verbose:
                     print(f"  ❌ Erreur: {e}")
+            file_progress.update(i + 1)
     else:
-        # Parallèle (sans IA)
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             future_to_file = {
                 executor.submit(chunker.process_markdown_file, str(md_file), False): md_file
@@ -345,16 +364,15 @@ def process_all_markdown_files(
 
             for i, future in enumerate(as_completed(future_to_file), 1):
                 md_file = future_to_file[future]
-
                 try:
                     result = future.result()
                     results.append(result)
-
-                    if verbose:
-                        print(f"  [{i}/{len(md_files)}] ✅ {md_file.name}: {result['num_chunks']} chunks")
                 except Exception as e:
                     if verbose:
-                        print(f"  [{i}/{len(md_files)}] ❌ {md_file.name}: {e}")
+                        print(f"  ❌ {md_file.name}: {e}")
+                file_progress.update(i)
+
+    file_progress.finish("✓")
 
     if verbose:
         total_chunks = sum(r['num_chunks'] for r in results)

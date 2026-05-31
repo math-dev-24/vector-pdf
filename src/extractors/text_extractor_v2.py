@@ -10,7 +10,8 @@ from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Dict, Callable
 import os
-from src.processors.text_cleaner import clean_text
+from src.core import settings
+from src.processors.text_cleaner import clean_text, clean_markdown_extraction
 
 
 def analyze_font_sizes(doc: fitz.Document) -> dict:
@@ -235,7 +236,7 @@ def extract_with_pymupdf4llm(
     except ImportError:
         raise ImportError(
             "pymupdf4llm n'est pas installé. "
-            "Installez-le avec: pip install pymupdf4llm"
+            "Installez-le avec: uv add pymupdf4llm"
         )
 
     pdf_path = Path(pdf_path)
@@ -247,14 +248,17 @@ def extract_with_pymupdf4llm(
     if verbose:
         print(f"  📄 Extraction avec pymupdf4llm...")
 
-    # Extraire avec pymupdf4llm
-    md_text = pymupdf4llm.to_markdown(str(pdf_path))
+    md_text = pymupdf4llm.to_markdown(
+        str(pdf_path),
+        margins=(settings.pdf_margin_top, settings.pdf_margin_bottom),
+        table_strategy=settings.pdf_table_strategy,
+        show_progress=verbose,
+    )
 
     if verbose:
         print(f"  🧹 Nettoyage du texte...")
 
-    # Nettoyer
-    cleaned_content = clean_text(md_text, is_ocr=False)
+    cleaned_content = clean_markdown_extraction(md_text, is_ocr=False)
 
     # Sauvegarder
     with open(output_file, "w", encoding="utf-8") as f:
@@ -298,38 +302,38 @@ def process_multiple_pdfs(
         max_workers = min(32, (os.cpu_count() or 1) + 4)
 
     if verbose:
-        print(f"\n🚀 Traitement parallèle de {len(pdf_paths)} PDF(s)...")
-        print(f"   Threads: {max_workers}")
+        print(f"\n🚀 Extraction de {len(pdf_paths)} PDF(s)...")
+        if use_multithreading:
+            print(f"   Threads: {max_workers}")
 
     output_files = []
     errors = []
+    progress = ProgressBar(len(pdf_paths), prefix="Extraction PDF", enabled=verbose)
 
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        # Soumettre tous les jobs
         future_to_pdf = {
             executor.submit(extraction_func, pdf_path, output_dir, False): pdf_path
             for pdf_path in pdf_paths
         }
 
-        # Traiter les résultats au fur et à mesure
         for i, future in enumerate(as_completed(future_to_pdf), 1):
             pdf_path = future_to_pdf[future]
 
             try:
                 output_file = future.result()
                 output_files.append(output_file)
-
-                if verbose:
-                    print(f"  [{i}/{len(pdf_paths)}] ✅ {Path(pdf_path).name}")
             except Exception as e:
                 errors.append((pdf_path, str(e)))
-                if verbose:
-                    print(f"  [{i}/{len(pdf_paths)}] ❌ {Path(pdf_path).name}: {e}")
 
-    if verbose:
-        print(f"\n✅ Traitement terminé: {len(output_files)}/{len(pdf_paths)} réussi(s)")
-        if errors:
-            print(f"   ⚠️  {len(errors)} erreur(s) rencontrée(s)")
+            progress.update(i)
+
+    progress.finish("✓" if not errors else f"⚠ {len(errors)} erreur(s)")
+
+    if verbose and errors:
+        for pdf_path, err in errors:
+            print(f"  ❌ {Path(pdf_path).name}: {err}")
+    elif verbose:
+        print(f"  {len(output_files)}/{len(pdf_paths)} fichier(s) extrait(s)")
 
     return output_files
 
