@@ -1,0 +1,33 @@
+{
+  "questions": [
+    {
+      "id": "norme_en378_fluide",
+      "question": "Quelles exigences de securite sont mentionnees pour les fluides frigorigenes selon la norme EN 378 ?",
+      "expected_sources": ["en 378"],
+      "expected_keywords": ["fluide", "securite"],
+      "expected_labels": ["norme_reglementation", "securite"],
+      "expected_tags": ["norme", "fluide_frigorigene"]
+    },
+    {
+      "id": "dimensionnement_debit",
+      "question": "Comment dimensionner un debit ou une puissance frigorifique pour une installation de climatisation ?",
+      "expected_keywords": ["debit", "puissance", "dimensionnement"],
+      "expected_labels": ["dimensionnement"],
+      "expected_tags": ["debit", "puissance", "climatisation"]
+    },
+    {
+      "id": "maintenance_controle",
+      "question": "Quels controles de maintenance sont prevus sur une installation frigorifique ?",
+      "expected_keywords": ["maintenance", "controle", "inspection"],
+      "expected_labels": ["maintenance"],
+      "expected_tags": ["maintenance", "froid"]
+    },
+    {
+      "id": "depannage_pression",
+      "question": "Que verifier en cas de defaut de pression ou d'alarme sur un circuit frigorifique ?",
+      "expected_keywords": ["pression", "alarme", "defaut"],
+      "expected_labels": ["depannage"],
+      "expected_tags": ["pression", "froid"]
+    }
+  ]
+}
