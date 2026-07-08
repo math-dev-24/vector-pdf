@@ -5,9 +5,36 @@ Améliore la qualité des données avant chunking et vectorisation.
 
 import re
 import unicodedata
+from pathlib import Path
 from typing import Literal
 
-CleanProfile = Literal["default", "markdown"]
+CleanProfile = Literal["default", "markdown", "technical_manual"]
+
+# Marqueur écrit en tête des .md après extraction (évite un double nettoyage agressif au chunking)
+CLEANING_MARKER_PREFIX = "<!-- vector-pdf:cleaned="
+CLEANING_MARKER_SUFFIX = " -->"
+
+
+def make_cleaning_marker(profile: str, is_ocr: bool = False) -> str:
+    """Génère le marqueur de nettoyage pour un fichier markdown."""
+    return f"{CLEANING_MARKER_PREFIX}{profile},ocr={str(is_ocr).lower()}{CLEANING_MARKER_SUFFIX}\n"
+
+
+def has_cleaning_marker(text: str) -> bool:
+    """Indique si le texte a déjà été nettoyé à l'extraction."""
+    return text.lstrip().startswith(CLEANING_MARKER_PREFIX)
+
+
+def strip_cleaning_marker(text: str) -> str:
+    """Retire le marqueur de nettoyage en tête de fichier."""
+    stripped = text.lstrip()
+    if not stripped.startswith(CLEANING_MARKER_PREFIX):
+        return text
+    end = stripped.find(CLEANING_MARKER_SUFFIX)
+    if end == -1:
+        return text
+    remainder = stripped[end + len(CLEANING_MARKER_SUFFIX):]
+    return remainder.lstrip("\n")
 
 _ROMAN_NUMERAL_RE = re.compile(r"^[IVXLCDM]+$")
 _TOC_START_PATTERNS = [
@@ -190,6 +217,17 @@ def remove_scattered_toc_entries(text: str) -> str:
     return remove_toc_and_summaries(text)
 
 
+def repair_superscripts(text: str) -> str:
+    """Répare les exposants cassés par pymupdf4llm / OCR (**[2]** → ²)."""
+    superscript_map = {"2": "²", "3": "³", "4": "⁴", "5": "⁵", "6": "⁶", "7": "⁷", "8": "⁸", "9": "⁹"}
+    for digit, char in superscript_map.items():
+        text = re.sub(rf"\*\*(\w+)\*\*\s*\*\*\[{digit}\]\*\*", rf"\1{char}", text)
+        text = re.sub(rf"\*\*\[{digit}\]\*\*", char, text)
+        text = re.sub(rf"(\w)\s*\[{digit}\]", rf"\1{char}", text)
+        text = re.sub(rf"\*\*(\w+)\*\*\s*\[{digit}\]", rf"\1{char}", text)
+    return text
+
+
 def fix_pdf_artifacts(text: str) -> str:
     """
     Corrige les artefacts courants des PDFs techniques (caractères invisibles,
@@ -199,11 +237,104 @@ def fix_pdf_artifacts(text: str) -> str:
     text = text.replace("\u00ad", "")
     text = re.sub(r"[\u200b-\u200d\ufeff]", "", text)
     text = re.sub(r"(\d+)\s*\[e\]", r"\1e", text, flags=re.IGNORECASE)
-    text = re.sub(r"\*\*(\w+)\*\*\s*\*\*\[2\]\*\*", r"\1²", text)
-    text = re.sub(r"\*\*(\w+)\*\*\s*\*\*\[3\]\*\*", r"\1³", text)
-    text = re.sub(r"(\w)\s*\[2\]", r"\1²", text)
-    text = re.sub(r"(\w)\s*\[3\]", r"\1³", text)
+    text = repair_superscripts(text)
     return text
+
+
+def remove_front_matter(text: str) -> str:
+    """
+    Supprime le front-matter éditeur (ISBN, adresse, crédits) en début de document.
+    S'arrête au premier titre de contenu réel (préface, chapitre, etc.).
+    """
+    front_matter_patterns = [
+        r"^ISBN\s+[\d\-Xx]+",
+        r"^www\.\S+",
+        r"^\d+,\s*rue\s+",
+        r"^Graphisme\s+de\s+couverture",
+        r"^Illustration\s+de\s+couverture",
+        r"^Mise\s+en\s+page\s*:",
+        r"^\d{4}\s+pour\s+la\s+nouvelle\s+présentation",
+        r"^prime\s+images/",
+        r"^istockphoto\.com",
+        r"^\d+e\s+édition\s*$",
+        r"^©\s*\d{4}",
+    ]
+    content_start_patterns = [
+        r"^#{1,6}\s+",
+        r"^\*\*(?:Préface|Avant-propos|Introduction|Sommaire|Chapitre)\b",
+        r"^\d+\.\d+\s+\S",
+        r"^#{1,6}\s+\*\*\d+",
+    ]
+
+    lines = text.split("\n")
+    cleaned: list[str] = []
+    in_front = True
+    skipped = 0
+
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            if not in_front:
+                cleaned.append(line)
+            continue
+
+        if in_front:
+            is_front = any(re.match(p, stripped, re.IGNORECASE) for p in front_matter_patterns)
+            is_content = any(re.match(p, stripped, re.IGNORECASE) for p in content_start_patterns)
+            if is_content:
+                in_front = False
+                cleaned.append(line)
+            elif is_front or (skipped < 40 and len(stripped) < 120 and not stripped.endswith(".")):
+                skipped += 1
+                continue
+            elif skipped >= 40:
+                in_front = False
+                cleaned.append(line)
+            else:
+                in_front = False
+                cleaned.append(line)
+        else:
+            cleaned.append(line)
+
+    return "\n".join(cleaned)
+
+
+def _vowel_ratio(text: str) -> float:
+    """Ratio de voyelles (fr/en) dans une chaîne."""
+    if not text:
+        return 0.0
+    vowels = sum(1 for c in text.lower() if c in "aeiouyàâäéèêëïîôùûüæœ")
+    alpha = sum(1 for c in text if c.isalpha())
+    if alpha == 0:
+        return 0.0
+    return vowels / alpha
+
+
+def is_corrupted_ocr_line(line: str, min_length: int = 20) -> bool:
+    """
+    Détecte une ligne OCR corrompue (ex: 'd Méhd i lifiédl iééAi ll d').
+    Heuristique : longueur > seuil, ratio voyelles < 30%, espaces anormaux.
+    """
+    stripped = line.strip()
+    if len(stripped) < min_length:
+        return False
+    if stripped.startswith("#") or stripped.startswith("|"):
+        return False
+
+    broken_words = len(re.findall(r"[a-zà-ü]\s+[a-zà-ü]", stripped, re.IGNORECASE))
+    if broken_words >= 3:
+        return True
+
+    if _vowel_ratio(stripped) >= 0.30:
+        return False
+
+    return _vowel_ratio(stripped) < 0.25 and len(stripped) > 25
+
+
+def remove_corrupted_ocr_lines(text: str) -> str:
+    """Supprime les lignes OCR manifestement corrompues."""
+    lines = text.split("\n")
+    return "\n".join(line for line in lines if not is_corrupted_ocr_line(line))
 
 
 def _is_false_heading(line: str) -> bool:
@@ -805,11 +936,67 @@ def improve_markdown_structure(text: str) -> str:
     return '\n'.join(merged_lines)
 
 
-def clean_markdown_extraction(text: str, is_ocr: bool = False) -> str:
+def save_cleaned_markdown(
+    output_file,
+    content: str,
+    is_ocr: bool = False,
+    profile: CleanProfile = "technical_manual",
+) -> str:
+    """
+    Nettoie le contenu, ajoute le marqueur d'extraction et écrit le fichier .md.
+
+    Returns:
+        Contenu nettoyé (avec marqueur)
+    """
+    if profile == "markdown":
+        cleaned = clean_markdown_extraction(content, is_ocr=is_ocr, profile="markdown")
+    elif profile == "default":
+        cleaned = clean_text(content, is_ocr=is_ocr, profile="default")
+    else:
+        cleaned = clean_technical_manual(content, is_ocr=is_ocr)
+
+    marked = make_cleaning_marker(profile, is_ocr) + cleaned
+    path = Path(output_file) if not isinstance(output_file, Path) else output_file
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(marked, encoding="utf-8")
+    return marked
+
+
+def clean_technical_manual(text: str, is_ocr: bool = False) -> str:
+    """
+    Profil manuels techniques : nettoyage markdown + front-matter + lignes OCR corrompues.
+    """
+    text = strip_cleaning_marker(text)
+    text = fix_pdf_artifacts(text)
+    text = fix_hyphenated_words(text)
+    text = remove_page_numbers(text)
+    text = remove_toc_and_summaries(text)
+    text = remove_front_matter(text)
+    text = remove_copyright_notices(text)
+    text = remove_unknown_characters(text, keep_common_symbols=True)
+
+    if is_ocr:
+        text = remove_ocr_artifacts(text)
+
+    text = remove_corrupted_ocr_lines(text)
+    text = normalize_whitespace(text)
+    text = normalize_headings(text)
+    return text.strip()
+
+
+def clean_markdown_extraction(
+    text: str,
+    is_ocr: bool = False,
+    profile: CleanProfile = "technical_manual",
+) -> str:
     """
     Nettoyage léger pour sorties pymupdf4llm / markdown déjà structuré.
     Préserve titres, formules et paragraphes ; retire surtout le bruit PDF.
     """
+    if profile == "technical_manual":
+        return clean_technical_manual(text, is_ocr=is_ocr)
+
+    text = strip_cleaning_marker(text)
     text = fix_pdf_artifacts(text)
     text = fix_hyphenated_words(text)
     text = remove_page_numbers(text)
@@ -822,6 +1009,18 @@ def clean_markdown_extraction(text: str, is_ocr: bool = False) -> str:
 
     text = normalize_whitespace(text)
     text = normalize_headings(text)
+    return text.strip()
+
+
+def light_clean_for_chunking(text: str, is_ocr: bool = False) -> str:
+    """
+    Nettoyage minimal au chunking si le fichier a déjà été nettoyé à l'extraction.
+    """
+    text = strip_cleaning_marker(text)
+    text = remove_page_numbers(text)
+    text = normalize_whitespace(text)
+    if is_ocr:
+        text = remove_corrupted_ocr_lines(text)
     return text.strip()
 
 

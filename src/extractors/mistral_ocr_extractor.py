@@ -189,13 +189,9 @@ def extract_text_with_mistral_ocr(
         # Le texte est déjà en Markdown depuis Mistral
         markdown_content = result['text']
         
-        # Nettoyer le texte (moins agressif que pour OCR classique)
-        from src.processors.text_cleaner import clean_markdown_extraction
-        cleaned_content = clean_markdown_extraction(markdown_content, is_ocr=False)
-        
-        # Sauvegarder
-        with open(output_file, "w", encoding="utf-8") as f:
-            f.write(cleaned_content)
+        from src.processors.text_cleaner import save_cleaned_markdown
+        save_cleaned_markdown(output_file, markdown_content, is_ocr=True, profile="technical_manual")
+        cleaned_content = output_file.read_text(encoding="utf-8")
         
         if verbose:
             tokens = result.get('tokens_used', 0)

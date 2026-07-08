@@ -266,6 +266,7 @@ class ChunkingService(IChunkingService):
         self.merger = ChunkMerger(
             min_chunk_size=settings.chunk_min_size,
             max_chunk_size=settings.chunk_max_size,
+            merge_strategy=settings.chunk_merge_strategy,
         )
         self.prioritizer = ChunkPrioritizer()
     
@@ -312,7 +313,7 @@ class ChunkingService(IChunkingService):
                 chunk_overlap=chunk_overlap,
                 use_adaptive_chunking=True,
                 use_semantic_chunking=use_semantic,
-                enable_ai_enrichment=True,
+                enable_ai_enrichment=settings.enable_ai_enrichment,
                 enable_context_augmentation=True,
                 augmentation_strategy="with_context",
                 verbose=self.verbose
@@ -560,7 +561,8 @@ class StorageService(IStorageService):
                 strategy=namespace_strategy.value,
                 namespace_prefix=namespace_prefix,
                 verbose=self.verbose,
-                embedding_version=settings.embedding_version
+                embedding_version=settings.embedding_version,
+                reset=reset
             )
 
         stats = vector_store.get_stats()

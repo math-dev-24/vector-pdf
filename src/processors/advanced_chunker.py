@@ -9,12 +9,19 @@ Chunker avancé qui orchestre tous les modules d'amélioration:
 
 import os
 from pathlib import Path
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from src.core import ProgressBar, get_logger
 
-from .text_cleaner import clean_markdown_extraction
+from .text_cleaner import (
+    clean_text,
+    clean_markdown_extraction,
+    clean_technical_manual,
+    light_clean_for_chunking,
+    has_cleaning_marker,
+    remove_toc_and_summaries,
+)
 from .section_detector import SectionDetector
 from .chunking_strategies import AdaptiveChunker, SemanticChunker, ContentTypeDetector
 from .metadata_enricher import MetadataEnricher
@@ -34,7 +41,7 @@ class AdvancedChunker:
         chunk_overlap: int = 200,
         use_adaptive_chunking: bool = True,
         use_semantic_chunking: bool = False,
-        enable_ai_enrichment: bool = True,
+        enable_ai_enrichment: bool = None,
         enable_context_augmentation: bool = True,
         augmentation_strategy: str = "with_context"  # "with_context", "embedding_optimized", "hybrid"
     ):
@@ -50,6 +57,11 @@ class AdvancedChunker:
             enable_context_augmentation: Ajouter contexte aux chunks
             augmentation_strategy: Stratégie d'augmentation
         """
+        from src.core import settings as app_settings
+
+        if enable_ai_enrichment is None:
+            enable_ai_enrichment = app_settings.enable_ai_enrichment
+
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
         self.use_adaptive_chunking = use_adaptive_chunking
@@ -100,9 +112,12 @@ class AdvancedChunker:
 
         original_length = len(text)
 
-        # Nettoyage léger (l'extraction PDF a déjà nettoyé le markdown)
+        # Nettoyage : léger si déjà nettoyé à l'extraction, sinon profil technique
         is_ocr = 'scan' in file_path.lower() or '_ocr' in file_path.lower()
-        text = clean_markdown_extraction(text, is_ocr=is_ocr)
+        if has_cleaning_marker(text):
+            text = light_clean_for_chunking(text, is_ocr=is_ocr)
+        else:
+            text = clean_technical_manual(text, is_ocr=is_ocr)
 
         cleaned_length = len(text)
         reduction_pct = 100 * (1 - cleaned_length / original_length) if original_length > 0 else 0
@@ -133,19 +148,40 @@ class AdvancedChunker:
 
         # 2. Détecter la structure (sections)
         self.section_detector.parse_document(text)
+        num_sections = len(self.section_detector.sections)
 
         if verbose and self.section_detector.sections:
-            print(f"  📑 Structure: {len(self.section_detector.sections)} sections détectées")
+            print(f"  📑 Structure: {num_sections} sections détectées")
+
+        # 2b. Fallback LLM si structure insuffisante
+        use_llm_boundaries = False
+        from .boundary_fallback import needs_boundary_fallback, split_with_llm_fallback
+        from src.core import settings as app_settings
+
+        if needs_boundary_fallback(text, num_sections):
+            use_llm_boundaries = True
+            if verbose:
+                print("  🤖 Fallback LLM: structure faible, découpage assisté")
 
         # 3. Chunking adaptatif ou sémantique
-        if self.use_semantic_chunking and self.semantic_chunker:
-            # Chunking par sections
-            section_chunks = self.semantic_chunker.chunk_by_sections(text)
+        if use_llm_boundaries:
+            section_chunks = split_with_llm_fallback(text, max_chunk_size=app_settings.chunk_max_size)
+            chunks_text = [content for _, content in section_chunks]
+            chunks_titles = [title for title, _ in section_chunks]
+        elif self.use_semantic_chunking and self.semantic_chunker:
+            from src.core import settings as app_settings
+
+            section_chunks = self.semantic_chunker.chunk_hybrid(
+                text,
+                adaptive_chunker=self.adaptive_chunker,
+                file_name=os.path.basename(file_path),
+                use_sentence_window=app_settings.use_sentence_window_chunking,
+            )
             chunks_text = [content for _, content in section_chunks]
             chunks_titles = [title for title, _ in section_chunks]
 
             if verbose:
-                print(f"  ✂️  Chunking sémantique: {len(chunks_text)} sections")
+                print(f"  ✂️  Chunking hybride (sections + adaptatif): {len(chunks_text)} chunks")
 
         elif self.use_adaptive_chunking and self.adaptive_chunker:
             # Détecter le type de contenu

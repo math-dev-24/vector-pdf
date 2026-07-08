@@ -6,19 +6,43 @@ from src.core import (
     PipelineError,
     ErrorType
 )
+from typing import Optional
 from src.vectorization.vector_store import VectorStore
 
 # Configuration du logging
 setup_logging(level=settings.log_level, log_file=settings.log_file)
 logger = get_logger(__name__)
 
+ALL_NAMESPACES = "__all__"
+
+
+def _as_dict(result) -> dict:
+    """Convertit une réponse Pinecone en dict exploitable."""
+    if hasattr(result, "to_dict"):
+        return result.to_dict()
+    return result
+
+
+def _available_query_namespaces(vector_store: VectorStore) -> list[str]:
+    """Liste les namespaces à interroger. Retourne default si l'index n'en expose aucun."""
+    stats = vector_store.get_stats()
+    namespaces = list(stats.get("namespaces", {}).keys())
+    return namespaces or [""]
+
+
+def _display_namespace(namespace: str) -> str:
+    if namespace == ALL_NAMESPACES:
+        return "tous"
+    return namespace if namespace else "(default)"
+
 
 def query_vector_db(
     question: str,
     vector_store: VectorStore,
-    namespace: str = "",
+    namespace: str = ALL_NAMESPACES,
     top_k: int = 5,
-    verbose: bool = True
+    verbose: bool = True,
+    filter_metadata: Optional[dict] = None,
 ) -> dict:
     """
     Interroge la base de données vectorielle avec une question.
@@ -36,7 +60,7 @@ def query_vector_db(
     if verbose:
         logger.info("Recherche en cours...")
         logger.info(f"Question: \"{question}\"")
-        logger.info(f"Namespace: {namespace if namespace else '(default)'}")
+        logger.info(f"Namespace: {_display_namespace(namespace)}")
         logger.info(f"Top-K: {top_k}")
 
     try:
@@ -50,13 +74,32 @@ def query_vector_db(
         if verbose:
             logger.info(f"Embedding créé (dimension: {len(query_embedding)})")
 
-        # Interroger Pinecone
-        results = vector_store.query(
-            query_embedding=query_embedding,
-            top_k=top_k,
-            namespace=namespace,
-            include_metadata=True
-        )
+        if namespace == ALL_NAMESPACES:
+            merged_matches = []
+            for ns in _available_query_namespaces(vector_store):
+                ns_results = _as_dict(vector_store.query(
+                    query_embedding=query_embedding,
+                    top_k=top_k,
+                    namespace=ns,
+                    filter_metadata=filter_metadata,
+                    include_metadata=True
+                ))
+                for match in ns_results.get("matches", []):
+                    metadata = match.setdefault("metadata", {})
+                    metadata["namespace"] = ns if ns else "(default)"
+                    merged_matches.append(match)
+
+            merged_matches.sort(key=lambda m: m.get("score", 0), reverse=True)
+            results = {"matches": merged_matches[:top_k]}
+        else:
+            # Interroger Pinecone
+            results = _as_dict(vector_store.query(
+                query_embedding=query_embedding,
+                top_k=top_k,
+                namespace=namespace,
+                filter_metadata=filter_metadata,
+                include_metadata=True
+            ))
 
         return results
     except Exception as e:
@@ -90,14 +133,39 @@ def display_results(results: dict, verbose: bool = True):
         metadata = match.get('metadata', {})
 
         print(f"\n[{i}] Score de similarité: {score:.4f}")
+        if metadata.get('namespace'):
+            print(f"    Namespace: {metadata['namespace']}")
         print(f"    Source: {metadata.get('file_name', 'N/A')}")
         print(f"    Chunk: {metadata.get('chunk_index', 'N/A')}/{metadata.get('total_chunks', 'N/A')}")
+
+        if metadata.get('section_hierarchy'):
+            print(f"    Section: {metadata['section_hierarchy']}")
+        elif metadata.get('section_title'):
+            print(f"    Section: {metadata['section_title']}")
+
+        if metadata.get('document_type'):
+            print(f"    Type: {metadata['document_type']}")
+
+        topics = metadata.get('topics', [])
+        if topics:
+            print(f"    Sujets: {', '.join(topics)}")
+
+        if metadata.get('rag_label'):
+            confidence = metadata.get('rag_label_confidence')
+            suffix = f" ({confidence:.2f})" if isinstance(confidence, (int, float)) else ""
+            print(f"    Label RAG: {metadata['rag_label']}{suffix}")
+
+        domain_tags = metadata.get('domain_tags', [])
+        if domain_tags:
+            print(f"    Tags: {', '.join(domain_tags)}")
+
+        if metadata.get('summary'):
+            print(f"    Résumé: {metadata['summary']}")
 
         if verbose:
             print(f"\n    Contenu:")
             print("    " + "-" * 76)
-            text = metadata.get('text', 'N/A')
-            # Afficher le texte avec indentation
+            text = metadata.get('display_text') or metadata.get('text', 'N/A')
             for line in text.split('\n'):
                 print(f"    {line}")
             print("    " + "-" * 76)
@@ -194,8 +262,8 @@ def main():
         print(f"\n❌ Erreur lors de la connexion: {e}\n")
         return
 
-    # Namespace par défaut
-    current_namespace = ""
+    # Namespace par défaut : recherche globale pour les index multi-namespace
+    current_namespace = ALL_NAMESPACES
 
     # Afficher les stats au démarrage
     stats = vector_store.get_stats()
@@ -247,9 +315,14 @@ def main():
             elif choice == "2":
                 # Changer de namespace
                 list_namespaces(vector_store)
-                new_namespace = input("\n🔄 Nouveau namespace (vide pour default): ").strip()
-                current_namespace = new_namespace
-                ns_display = current_namespace if current_namespace else "(default)"
+                print("  • tous: recherche dans tous les namespaces")
+                new_namespace = input("\n🔄 Nouveau namespace (vide=default, tous=global): ").strip()
+                current_namespace = (
+                    ALL_NAMESPACES
+                    if new_namespace.lower() in {"tous", "all", "*"}
+                    else new_namespace
+                )
+                ns_display = _display_namespace(current_namespace)
                 print(f"\n✅ Namespace actuel: {ns_display}")
 
             elif choice == "3":

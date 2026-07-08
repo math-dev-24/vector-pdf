@@ -11,6 +11,59 @@ from dataclasses import dataclass
 from src.processors.section_detector import SectionDetector
 
 
+def is_markdown_table_line(line: str) -> bool:
+    """Détecte une ligne de tableau markdown."""
+    stripped = line.strip()
+    return "|" in stripped and stripped.count("|") >= 2
+
+
+def split_preserving_tables(text: str) -> List[str]:
+    """
+    Découpe le texte en blocs en gardant chaque tableau markdown atomique.
+    """
+    if not text.strip():
+        return []
+
+    blocks: List[str] = []
+    current_lines: List[str] = []
+    in_table = False
+
+    def flush() -> None:
+        nonlocal current_lines
+        if current_lines:
+            block = "\n".join(current_lines).strip()
+            if block:
+                blocks.append(block)
+        current_lines = []
+
+    for line in text.split("\n"):
+        if is_markdown_table_line(line):
+            if not in_table and current_lines:
+                flush()
+            in_table = True
+            current_lines.append(line)
+            continue
+
+        if in_table:
+            if not line.strip():
+                current_lines.append(line)
+                continue
+            flush()
+            in_table = False
+
+        current_lines.append(line)
+
+    flush()
+    return blocks
+
+
+def is_procedural_document(file_name: str) -> bool:
+    """Heuristique : manuels de dépannage / procédures."""
+    name = file_name.lower()
+    keywords = ("depann", "dépann", "procedure", "procédure", "troubleshoot", "diagnostic")
+    return any(k in name for k in keywords)
+
+
 @dataclass
 class ChunkingConfig:
     """Configuration pour une stratégie de chunking."""
@@ -179,6 +232,9 @@ class AdaptiveChunker:
         if content_type is None:
             content_type = ContentTypeDetector.detect_content_type(text)
 
+        if content_type == "table":
+            return self._chunk_tables_atomic(text)
+
         config = self.configs.get(content_type, self.configs['narrative'])
 
         splitter = RecursiveCharacterTextSplitter(
@@ -190,6 +246,40 @@ class AdaptiveChunker:
         )
 
         return splitter.split_text(text)
+
+    def _chunk_tables_atomic(self, text: str) -> List[str]:
+        """Garde chaque tableau intact ; découpe le texte narratif autour."""
+        blocks = split_preserving_tables(text)
+        chunks: List[str] = []
+        narrative_buffer: List[str] = []
+        table_config = self.configs["table"]
+
+        def flush_narrative() -> None:
+            nonlocal narrative_buffer
+            if not narrative_buffer:
+                return
+            narrative_text = "\n\n".join(narrative_buffer)
+            if len(narrative_text) <= table_config.chunk_size:
+                chunks.append(narrative_text)
+            else:
+                splitter = RecursiveCharacterTextSplitter(
+                    chunk_size=table_config.chunk_size,
+                    chunk_overlap=table_config.chunk_overlap,
+                    length_function=len,
+                    separators=table_config.separators,
+                )
+                chunks.extend(splitter.split_text(narrative_text))
+            narrative_buffer = []
+
+        for block in blocks:
+            if any(is_markdown_table_line(line) for line in block.split("\n")):
+                flush_narrative()
+                chunks.append(block)
+            else:
+                narrative_buffer.append(block)
+
+        flush_narrative()
+        return chunks
 
 
 class SemanticChunker:
@@ -352,15 +442,62 @@ class SemanticChunker:
         content: str,
         base_title: str
     ) -> List[Tuple[str, str]]:
-        """Découpe un chunk trop grand en respectant max_chunk_size."""
-        sub_texts = self._splitter.split_text(content)
-        if len(sub_texts) == 1:
-            return [(base_title, content)]
+        """Découpe un chunk trop grand en respectant tableaux et max_chunk_size."""
+        blocks = split_preserving_tables(content)
+        result: List[Tuple[str, str]] = []
 
-        return [
-            (f"{base_title} (partie {i + 1}/{len(sub_texts)})", text)
-            for i, text in enumerate(sub_texts)
-        ]
+        for block in blocks:
+            if len(block) <= self.max_chunk_size:
+                result.append((base_title, block))
+                continue
+
+            if any(is_markdown_table_line(line) for line in block.split("\n")):
+                result.append((base_title, block))
+                continue
+
+            sub_texts = self._splitter.split_text(block)
+            if len(sub_texts) == 1:
+                result.append((base_title, block))
+            else:
+                result.extend([
+                    (f"{base_title} (partie {i + 1}/{len(sub_texts)})", text)
+                    for i, text in enumerate(sub_texts)
+                ])
+
+        return result if result else [(base_title, content)]
+
+    def chunk_hybrid(
+        self,
+        text: str,
+        adaptive_chunker: Optional["AdaptiveChunker"] = None,
+        file_name: str = "",
+        use_sentence_window: bool = False,
+    ) -> List[Tuple[str, str]]:
+        """
+        Découpe par sections puis applique un chunking adaptatif à l'intérieur de chaque section.
+        """
+        section_chunks = self.chunk_by_sections(text)
+        if not adaptive_chunker:
+            return section_chunks
+
+        hybrid: List[Tuple[str, str]] = []
+        procedural = use_sentence_window or is_procedural_document(file_name)
+        sentence_chunker = SentenceWindowChunker() if procedural else None
+
+        for title, content in section_chunks:
+            content_type = ContentTypeDetector.detect_content_type(content)
+
+            if content_type in ("table", "list", "code"):
+                sub_chunks = adaptive_chunker.chunk_text(content, content_type)
+                for sub in sub_chunks:
+                    hybrid.append((title, sub))
+            elif procedural and sentence_chunker and content_type in ("narrative", "mixed"):
+                for window in sentence_chunker.chunk_with_windows(content):
+                    hybrid.append((title, window["context"]))
+            else:
+                hybrid.append((title, content))
+
+        return hybrid
 
 
 class SentenceWindowChunker:
@@ -369,12 +506,15 @@ class SentenceWindowChunker:
     Stocke des phrases individuelles mais avec contexte autour.
     """
 
-    def __init__(self, window_size: int = 3):
+    def __init__(self, window_size: int = 2):
         self.window_size = window_size
 
     def chunk_with_windows(self, text: str) -> List[Dict]:
         sentences = re.split(r'(?<=[.!?])\s+', text)
-        sentences = [s.strip() for s in sentences if s.strip()]
+        sentences = [s.strip() for s in sentences if s.strip() and len(s.strip()) > 15]
+
+        if not sentences:
+            return [{"sentence": text, "context": text, "window_indices": (0, 1), "sentence_index": 0}]
 
         chunks = []
 
@@ -393,3 +533,7 @@ class SentenceWindowChunker:
             })
 
         return chunks
+
+    def chunk_text(self, text: str) -> List[str]:
+        """Retourne les fenêtres de contexte comme chunks texte."""
+        return [item["context"] for item in self.chunk_with_windows(text)]

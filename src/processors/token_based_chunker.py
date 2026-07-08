@@ -10,6 +10,7 @@ from src.core import ProgressBar
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from src.core import get_logger
+from src.processors.chunking_strategies import split_preserving_tables, is_markdown_table_line
 
 logger = get_logger(__name__)
 
@@ -42,41 +43,47 @@ class TokenBasedChunker:
     
     def chunk_text(self, text: str) -> List[str]:
         """
-        Découpe le texte en chunks basés sur les tokens.
-        
-        Args:
-            text: Texte à chunker
-            
-        Returns:
-            Liste de chunks
+        Découpe le texte en chunks basés sur les tokens, en préservant les tableaux.
         """
         if not text.strip():
             return []
-        
-        # Encoder en tokens
+
+        blocks = split_preserving_tables(text)
+        chunks: List[str] = []
+
+        for block in blocks:
+            if any(is_markdown_table_line(line) for line in block.split("\n")):
+                token_count = self.get_token_count(block)
+                if token_count <= self.chunk_size_tokens:
+                    chunks.append(block)
+                else:
+                    chunks.extend(self._chunk_text_raw(block))
+            else:
+                chunks.extend(self._chunk_text_raw(block))
+
+        return chunks
+
+    def _chunk_text_raw(self, text: str) -> List[str]:
+        """Découpe brute par tokens sans casser les tableaux."""
+        if not text.strip():
+            return []
+
         tokens = self.encoding.encode(text)
-        
+
         if not tokens:
             return []
-        
+
         chunks = []
         i = 0
-        
+
         while i < len(tokens):
-            # Prendre un chunk
             chunk_tokens = tokens[i:i + self.chunk_size_tokens]
-            
-            # Décoder en texte
             chunk_text = self.encoding.decode(chunk_tokens)
             chunks.append(chunk_text)
-            
-            # Avancer avec overlap
             i += self.chunk_size_tokens - self.chunk_overlap_tokens
-            
-            # Éviter les boucles infinies
             if i >= len(tokens):
                 break
-        
+
         return chunks
     
     def get_token_count(self, text: str) -> int:

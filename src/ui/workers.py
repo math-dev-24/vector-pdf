@@ -12,6 +12,7 @@ from src.pipeline.models import (
     ExtractionMode,
     PDFFilter,
     ChunkingMode,
+    NamespaceStrategy,
 )
 
 logger = get_logger(__name__)
@@ -160,6 +161,7 @@ class PipelineWorker(QObject):
                 data_dir=settings.data_dir,
                 output_dir=settings.output_dir,
                 namespace=namespace,
+                namespace_strategy=NamespaceStrategy.NONE,
                 reset_namespace=reset,
             )
             pipeline = Pipeline(config=config, state_manager=self.state_manager)
@@ -203,6 +205,7 @@ class PipelineWorker(QObject):
                 embedding_model=settings.embedding_model,
                 embedding_batch_size=settings.embedding_batch_size,
                 namespace=namespace,
+                namespace_strategy=NamespaceStrategy.NONE,
                 reset_namespace=reset,
             )
             pipeline = Pipeline(config=config, state_manager=self.state_manager)

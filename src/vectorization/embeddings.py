@@ -18,8 +18,24 @@ from src.core import (
     ProgressBar,
 )
 from src.core.cache import get_embedding_cache
+from src.processors.contextual_augmenter import ContextualAugmenter
 
 logger = get_logger(__name__)
+
+_embedding_augmenter = ContextualAugmenter()
+
+
+def get_embedding_text(chunk: Dict) -> str:
+    """
+    Retourne le texte à vectoriser : brut ou enrichi avec contexte sectionnel.
+    """
+    if not settings.embed_with_context:
+        return chunk['content']
+
+    if chunk.get('metadata', {}).get('embedding_text'):
+        return chunk['metadata']['embedding_text']
+
+    return _embedding_augmenter.create_embedding_optimized_text(chunk)
 
 
 @retry_with_backoff(
@@ -231,8 +247,12 @@ def embed_chunks(
     model = model or settings.embedding_model
     batch_size = batch_size or settings.embedding_batch_size
     
-    # Extraire les textes
-    texts = [chunk['content'] for chunk in chunks_data]
+    # Extraire les textes (avec contexte sectionnel si configuré)
+    texts = [get_embedding_text(chunk) for chunk in chunks_data]
+
+    # Mémoriser le texte embeddé dans les métadonnées
+    for chunk, embed_text in zip(chunks_data, texts):
+        chunk['metadata']['embedding_text'] = embed_text
 
     # Créer les batches
     num_batches = (len(texts) - 1) // batch_size + 1
@@ -347,7 +367,9 @@ async def embed_chunks_async(
     model = model or settings.embedding_model
     batch_size = batch_size or settings.embedding_batch_size
 
-    texts = [chunk['content'] for chunk in chunks_data]
+    texts = [get_embedding_text(chunk) for chunk in chunks_data]
+    for chunk, embed_text in zip(chunks_data, texts):
+        chunk['metadata']['embedding_text'] = embed_text
     num_batches = (len(texts) - 1) // batch_size + 1
 
     # Créer les batchs

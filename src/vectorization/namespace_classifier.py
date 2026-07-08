@@ -155,7 +155,7 @@ def classify_chunks(
     """
     label_to_ns, valid_namespaces, ns_config = _get_active_config()
     system_prompt = _build_system_prompt(ns_config)
-    fallback_ns = next(iter(valid_namespaces))  # premier namespace comme fallback
+    fallback_ns = next(iter(ns_config.values()))["id"]  # fallback déterministe
 
     client = OpenAIClient().client
     total = len(chunks)

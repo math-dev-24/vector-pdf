@@ -16,6 +16,68 @@ from src.core import settings, get_logger, ConfigurationError, ProgressBar
 logger = get_logger(__name__)
 
 
+def build_pinecone_metadata(chunk: Dict, embedding_version: Optional[str] = None) -> Dict:
+    """
+    Construit les métadonnées Pinecone à partir d'un chunk enrichi.
+    Pinecone accepte strings, numbers, booleans et listes de strings.
+    """
+    meta = chunk.get('metadata', {})
+    content = chunk.get('content', '')
+    display = meta.get('display_content') or content
+
+    metadata = {
+        'source': meta.get('source', ''),
+        'file_name': meta.get('file_name', ''),
+        'chunk_index': meta.get('chunk_index', 0),
+        'total_chunks': meta.get('total_chunks', 0),
+        'chunk_size': meta.get('chunk_size', len(content)),
+        'text': content[:8000],
+        'display_text': display[:8000],
+        'embedding_dimension': len(chunk.get('embedding', [])),
+    }
+
+    if meta.get('section_hierarchy_string'):
+        metadata['section_hierarchy'] = meta['section_hierarchy_string'][:500]
+
+    if meta.get('section_title'):
+        metadata['section_title'] = str(meta['section_title'])[:200]
+
+    if meta.get('summary'):
+        metadata['summary'] = str(meta['summary'])[:500]
+
+    if meta.get('document_type') and meta['document_type'] != 'unknown':
+        metadata['document_type'] = str(meta['document_type'])[:50]
+
+    topics = meta.get('topics') or []
+    if topics:
+        metadata['topics'] = [str(t)[:80] for t in topics[:5]]
+
+    keywords = meta.get('keywords_ai') or meta.get('keywords') or []
+    if keywords:
+        metadata['keywords'] = [str(k)[:60] for k in keywords[:10]]
+
+    domain_tags = meta.get('domain_tags') or []
+    if domain_tags:
+        metadata['domain_tags'] = [str(tag)[:60] for tag in domain_tags[:8]]
+
+    if meta.get('rag_label'):
+        metadata['rag_label'] = str(meta['rag_label'])[:80]
+
+    if meta.get('rag_label_confidence') is not None:
+        metadata['rag_label_confidence'] = float(meta['rag_label_confidence'])
+
+    if meta.get('quality_score') is not None:
+        metadata['quality_score'] = float(meta['quality_score'])
+
+    if meta.get('chunk_quality_score') is not None:
+        metadata['chunk_quality_score'] = float(meta['chunk_quality_score'])
+
+    if embedding_version:
+        metadata['embedding_version'] = embedding_version
+
+    return metadata
+
+
 def sanitize_vector_id(text: str) -> str:
     """
     Nettoie un texte pour l'utiliser comme ID Pinecone (ASCII uniquement).
@@ -175,20 +237,8 @@ class VectorStore:
             clean_filename = sanitize_vector_id(chunk['metadata']['file_name'])
             vector_id = f"{clean_filename}_chunk_{chunk['metadata']['chunk_index']}"
 
-            # Métadonnées (Pinecone accepte strings, numbers, booleans, lists)
-            metadata = {
-                'source': chunk['metadata']['source'],
-                'file_name': chunk['metadata']['file_name'],  # Garder le nom original dans les métadonnées
-                'chunk_index': chunk['metadata']['chunk_index'],
-                'total_chunks': chunk['metadata']['total_chunks'],
-                'chunk_size': chunk['metadata']['chunk_size'],
-                'text': chunk['content'][:1000],  # Limiter à 1000 chars pour les métadonnées
-                'embedding_dimension': len(embedding)  # Ajouter la dimension dans les métadonnées
-            }
-            
-            # Ajouter la version si fournie
-            if embedding_version:
-                metadata['embedding_version'] = embedding_version
+            # Métadonnées enrichies pour le retrieval RAG
+            metadata = build_pinecone_metadata(chunk, embedding_version=embedding_version)
 
             vectors.append({
                 'id': vector_id,
@@ -241,7 +291,8 @@ class VectorStore:
         namespace_prefix: str = "",
         batch_size: int = 100,
         verbose: bool = True,
-        embedding_version: Optional[str] = None
+        embedding_version: Optional[str] = None,
+        reset: bool = False
     ) -> Dict[str, int]:
         """
         Distribue les chunks dans des namespaces distincts selon la stratégie choisie.
@@ -259,6 +310,7 @@ class VectorStore:
             batch_size: Taille des batchs pour l'upload Pinecone
             verbose: Afficher la progression
             embedding_version: Version des embeddings (optionnel)
+            reset: Vider les namespaces calculés avant l'upload
 
         Returns:
             Dict {namespace: nombre_de_chunks_uploadés}
@@ -270,6 +322,8 @@ class VectorStore:
             from src.vectorization.namespace_classifier import classify_chunks
             namespaces = classify_chunks(chunks, verbose=verbose)
             for chunk, ns in zip(chunks, namespaces):
+                if namespace_prefix:
+                    ns = f"{namespace_prefix}_{ns}"
                 groups[ns].append(chunk)
         else:
             # Stratégies mécaniques : by_file, by_folder, none
@@ -291,6 +345,10 @@ class VectorStore:
         ns_progress = ProgressBar(len(groups), prefix="Namespaces", enabled=verbose)
         for ns_idx, (ns, ns_chunks) in enumerate(sorted(groups.items()), 1):
             ns_display = ns if ns else "(default)"
+            if reset:
+                if verbose:
+                    print(f"→ Reset '{ns_display}'")
+                self.delete_all(namespace=ns)
             if verbose:
                 print(f"→ Upload '{ns_display}' ({len(ns_chunks)} chunks)")
             self.add_chunks(

@@ -6,12 +6,46 @@ Utilise OpenAI pour extraire entités, mots-clés, résumés, etc.
 import os
 import re
 import json
-from typing import Dict, List
+from typing import Dict, List, Optional
 from openai import OpenAI
 
 from src.core import get_logger, ProgressBar
 
 logger = get_logger(__name__)
+
+RAG_LABELS = {
+    "norme_reglementation",
+    "dimensionnement",
+    "depannage",
+    "installation_mise_en_service",
+    "maintenance",
+    "securite",
+    "fluide_frigorigene",
+    "general",
+}
+
+DOMAIN_TAG_PATTERNS = {
+    "froid": r"\bfroid|frigorifique|refrigeration|réfrigération|groupe froid|chambre froide",
+    "climatisation": r"\bclimatisation|clim\b|split|vrv|drv|cta|traitement d'air",
+    "pompe_a_chaleur": r"pompe à chaleur|\bpac\b|aerothermie|aérothermie",
+    "fluide_frigorigene": r"\bfluide|frigorig[eè]ne|r32|r410a|r407c|r134a|co2|r744|propane|r290|hfo|hfc",
+    "pression": r"\bpression|bar\b|épreuve|epreuve|soupape|détendeur|detendeur",
+    "temperature": r"\btemp[ée]rature|surchauffe|sous-refroidissement|évaporation|evaporation|condensation",
+    "debit": r"\bd[ée]bit|m3/h|m³/h|l/s|kg/h",
+    "puissance": r"\bpuissance|kw\b|watt|capacit[ée]|charge thermique",
+    "norme": r"\bnorme|nf en|en 378|atex|erp|r[ée]glement|f-gas|ce\b|directive",
+    "maintenance": r"\bmaintenance|entretien|contr[ôo]le|inspection|nettoyage|v[ée]rification",
+}
+
+LABEL_PATTERNS = [
+    ("norme_reglementation", r"\bnorme|nf en|en 378|r[ée]glement|directive|arr[êe]t[ée]|obligation|f-gas|conformit[ée]"),
+    ("dimensionnement", r"\bdimensionnement|calcul|s[ée]lection|puissance|d[ée]bit|perte de charge|charge thermique|abaque|formule"),
+    ("depannage", r"\bd[ée]pannage|diagnostic|panne|d[ée]faut|alarme|code erreur|sympt[oô]me|rem[eè]de|cause"),
+    ("installation_mise_en_service", r"\binstallation|mise en service|raccordement|montage|implantation|tirage au vide|brasage|charge"),
+    ("maintenance", r"\bmaintenance|entretien|inspection|nettoyage|contr[ôo]le p[ée]riodique|v[ée]rification"),
+    ("securite", r"\bs[ée]curit[ée]|danger|risque|toxicit[ée]|inflammable|pression maximale|epi|habilitation|consigne"),
+    ("fluide_frigorigene", r"\bfluide|frigorig[eè]ne|r32|r410a|r407c|r134a|co2|r744|r290|hfo|hfc|prg|gwp"),
+]
 
 
 class MetadataEnricher:
@@ -114,6 +148,41 @@ class MetadataEnricher:
 
         return entities
 
+    def detect_domain_tags(self, text: str) -> List[str]:
+        """Retourne des tags métier froid/climatisation détectés par heuristiques."""
+        normalized = text.lower()
+        tags = [
+            tag
+            for tag, pattern in DOMAIN_TAG_PATTERNS.items()
+            if re.search(pattern, normalized, re.IGNORECASE)
+        ]
+        return tags[:8]
+
+    def detect_rag_label_basic(self, text: str) -> tuple[str, float]:
+        """Classe un chunk dans un label métier stable, sans appel IA."""
+        normalized = text.lower()
+        best_label = "general"
+        best_score = 0
+
+        for label, pattern in LABEL_PATTERNS:
+            score = len(re.findall(pattern, normalized, re.IGNORECASE))
+            if score > best_score:
+                best_label = label
+                best_score = score
+
+        if best_score >= 3:
+            return best_label, 0.78
+        if best_score >= 1:
+            return best_label, 0.62
+        return "general", 0.45
+
+    def normalize_rag_label(self, label: str, fallback: str = "general") -> str:
+        """Normalise un label IA vers l'identifiant attendu."""
+        if not label:
+            return fallback
+        clean = str(label).strip().lower().replace(" ", "_").replace("-", "_")
+        return clean if clean in RAG_LABELS else fallback
+
     def extract_with_ai(self, text: str, max_length: int = 2000) -> Dict:
         """
         Extraction avancée avec IA (OpenAI).
@@ -131,7 +200,7 @@ class MetadataEnricher:
         # Tronquer si trop long
         text_sample = text[:max_length] if len(text) > max_length else text
 
-        prompt = f"""Analyse ce texte technique et extrais les informations au format JSON.
+        prompt = f"""Analyse ce texte technique de normes, froid, refrigeration, climatisation ou HVAC et extrais les informations au format JSON.
 
 {text_sample}
 
@@ -139,12 +208,15 @@ Retourne UNIQUEMENT un JSON valide (pas de markdown):
 {{
   "keywords": ["mot1", "mot2"],
   "topics": ["sujet1", "sujet2"],
-  "document_type": "manuel|rapport|procedure|autre",
+  "domain_tags": ["froid", "climatisation"],
+  "rag_label": "norme_reglementation|dimensionnement|depannage|installation_mise_en_service|maintenance|securite|fluide_frigorigene|general",
+  "rag_label_confidence": 0.0,
+  "document_type": "norme|manuel|procedure|fiche_technique|rapport|autre",
   "language": "fr",
   "summary": "résumé en une phrase courte sans guillemets"
 }}
 
-Max 5 keywords, max 3 topics. Listes vides [] si rien trouvé."""
+Max 5 keywords, max 3 topics, max 5 domain_tags. Listes vides [] si rien trouvé."""
 
         try:
             response = self.client.chat.completions.create(
@@ -352,6 +424,10 @@ Max 5 keywords, max 3 topics. Listes vides [] si rien trouvé."""
         # Extraction basique (toujours)
         enriched['keywords'] = self.extract_keywords_basic(text)
         enriched['entities_basic'] = self.extract_entities_basic(text)
+        basic_label, basic_confidence = self.detect_rag_label_basic(text)
+        enriched['rag_label'] = basic_label
+        enriched['rag_label_confidence'] = basic_confidence
+        enriched['domain_tags'] = self.detect_domain_tags(text)
 
         # Features du contenu
         enriched.update(self.detect_content_features(text))
@@ -364,6 +440,22 @@ Max 5 keywords, max 3 topics. Listes vides [] si rien trouvé."""
                 if ai_metadata.get('entities'):
                     enriched['entities_ai'] = ai_metadata['entities']
                 enriched['topics'] = ai_metadata.get('topics', [])
+                if ai_metadata.get('domain_tags'):
+                    tags = [
+                        str(tag).strip().lower().replace(" ", "_")
+                        for tag in ai_metadata.get('domain_tags', [])
+                        if str(tag).strip()
+                    ]
+                    enriched['domain_tags'] = list(dict.fromkeys(enriched.get('domain_tags', []) + tags))[:8]
+                enriched['rag_label'] = self.normalize_rag_label(
+                    ai_metadata.get('rag_label', ''),
+                    fallback=enriched.get('rag_label', 'general'),
+                )
+                if ai_metadata.get('rag_label_confidence') is not None:
+                    try:
+                        enriched['rag_label_confidence'] = float(ai_metadata['rag_label_confidence'])
+                    except (TypeError, ValueError):
+                        pass
                 enriched['document_type'] = ai_metadata.get('document_type', 'unknown')
                 enriched['language'] = ai_metadata.get('language', 'unknown')
                 enriched['summary'] = ai_metadata.get('summary', '')
@@ -382,39 +474,141 @@ Max 5 keywords, max 3 topics. Listes vides [] si rien trouvé."""
         self,
         chunks: List[Dict],
         use_ai: bool = True,
-        verbose: bool = False
+        verbose: bool = False,
+        batch_size: Optional[int] = None,
+        min_quality_for_ai: float = 0.5,
     ) -> List[Dict]:
         """
-        Enrichit un lot de chunks.
+        Enrichit un lot de chunks (IA en batch pour réduire les appels API).
 
         Args:
             chunks: Liste de chunks avec 'content' et 'metadata'
             use_ai: Utiliser l'IA pour enrichissement
             verbose: Afficher progression
+            batch_size: Taille des batchs GPT (défaut: settings.ai_enrichment_batch_size)
+            min_quality_for_ai: Ne pas appeler GPT sur chunks sous ce score qualité basique
 
         Returns:
             Chunks avec métadonnées enrichies
         """
-        enriched_chunks = []
+        from src.core import settings
+
+        batch_size = batch_size or settings.ai_enrichment_batch_size
+        enriched_chunks: List[Dict] = []
         total = len(chunks)
         progress = ProgressBar(total, prefix="Enrichissement", enabled=verbose)
 
-        for i, chunk in enumerate(chunks):
-            enriched_metadata = self.enrich_chunk_metadata(
+        # Enrichissement basique pour tous
+        basic_enriched: List[Dict] = []
+        for chunk in chunks:
+            meta = self.enrich_chunk_metadata(
                 text=chunk['content'],
                 base_metadata=chunk['metadata'],
-                use_ai_extraction=use_ai
+                use_ai_extraction=False,
             )
+            basic_enriched.append({'content': chunk['content'], 'metadata': meta})
 
-            enriched_chunks.append({
-                'content': chunk['content'],
-                'metadata': enriched_metadata
-            })
+        if not (use_ai and self.use_ai):
+            for i, item in enumerate(basic_enriched):
+                enriched_chunks.append(item)
+                progress.update(i + 1)
+            progress.finish("✓")
+            return enriched_chunks
+
+        # Batch IA sur chunks de qualité suffisante
+        ai_candidates: List[int] = []
+        for i, item in enumerate(basic_enriched):
+            score = item['metadata'].get('chunk_quality_score', 1.0)
+            if score >= min_quality_for_ai:
+                ai_candidates.append(i)
+
+        for batch_start in range(0, len(ai_candidates), batch_size):
+            batch_indices = ai_candidates[batch_start:batch_start + batch_size]
+            ai_results = self._extract_batch_with_ai(
+                [basic_enriched[i]['content'] for i in batch_indices]
+            )
+            for idx, ai_meta in zip(batch_indices, ai_results):
+                if ai_meta:
+                    basic_enriched[idx]['metadata'].update({
+                        'keywords_ai': ai_meta.get('keywords', []),
+                        'topics': ai_meta.get('topics', []),
+                        'document_type': ai_meta.get('document_type', 'unknown'),
+                        'language': ai_meta.get('language', 'unknown'),
+                        'summary': ai_meta.get('summary', ''),
+                    })
+                    if ai_meta.get('domain_tags'):
+                        tags = [
+                            str(tag).strip().lower().replace(" ", "_")
+                            for tag in ai_meta.get('domain_tags', [])
+                            if str(tag).strip()
+                        ]
+                        existing_tags = basic_enriched[idx]['metadata'].get('domain_tags', [])
+                        basic_enriched[idx]['metadata']['domain_tags'] = list(
+                            dict.fromkeys(existing_tags + tags)
+                        )[:8]
+                    if ai_meta.get('rag_label'):
+                        current_label = basic_enriched[idx]['metadata'].get('rag_label', 'general')
+                        basic_enriched[idx]['metadata']['rag_label'] = self.normalize_rag_label(
+                            ai_meta.get('rag_label', ''),
+                            fallback=current_label,
+                        )
+                    if ai_meta.get('rag_label_confidence') is not None:
+                        try:
+                            basic_enriched[idx]['metadata']['rag_label_confidence'] = float(
+                                ai_meta['rag_label_confidence']
+                            )
+                        except (TypeError, ValueError):
+                            pass
+                    if ai_meta.get('entities'):
+                        basic_enriched[idx]['metadata']['entities_ai'] = ai_meta['entities']
+
+        for i, item in enumerate(basic_enriched):
+            enriched_chunks.append(item)
             progress.update(i + 1)
 
         progress.finish("✓")
-
         return enriched_chunks
+
+    def _extract_batch_with_ai(self, texts: List[str]) -> List[Dict]:
+        """Extrait les métadonnées pour plusieurs chunks en un seul appel GPT."""
+        if not texts or not self.use_ai:
+            return [{} for _ in texts]
+
+        items = []
+        for i, text in enumerate(texts):
+            sample = text[:1500] if len(text) > 1500 else text
+            items.append({"id": i, "text": sample})
+
+        prompt = f"""Analyse ces extraits techniques de normes, froid, refrigeration, climatisation ou HVAC et retourne un JSON:
+{{"chunks": [{{"id": 0, "keywords": [], "topics": [], "domain_tags": [], "rag_label": "norme_reglementation|dimensionnement|depannage|installation_mise_en_service|maintenance|securite|fluide_frigorigene|general", "rag_label_confidence": 0.0, "document_type": "norme|manuel|procedure|fiche_technique|rapport|autre", "language": "fr", "summary": "une phrase"}}]}}
+
+Extraits:
+{json.dumps(items, ensure_ascii=False)}
+
+Max 5 keywords, 3 topics et 5 domain_tags par chunk. Utilise rag_label comme label principal du passage."""
+
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "Tu extrais des métadonnées structurées. JSON valide uniquement.",
+                    },
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.0,
+                max_tokens=2000,
+                response_format={"type": "json_object"},
+            )
+            content = (response.choices[0].message.content or "").strip()
+            parsed = self._parse_ai_json(content)
+            chunk_list = parsed.get("chunks", [])
+            by_id = {item.get("id", j): item for j, item in enumerate(chunk_list)}
+            return [by_id.get(i, {}) for i in range(len(texts))]
+        except Exception as e:
+            logger.debug(f"Erreur enrichissement batch IA: {e}")
+            return [{} for _ in texts]
 
 
 

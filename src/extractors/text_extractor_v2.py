@@ -11,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Dict, Callable
 import os
 from src.core import settings
-from src.processors.text_cleaner import clean_text, clean_markdown_extraction
+from src.processors.text_cleaner import clean_text, save_cleaned_markdown
 
 
 def analyze_font_sizes(doc: fitz.Document) -> dict:
@@ -99,7 +99,8 @@ def extract_structured_text_from_pdf(
     pdf_path: str,
     output_dir: str = "./OUTPUT",
     verbose: bool = True,
-    auto_detect_headings: bool = True
+    auto_detect_headings: bool = True,
+    is_ocr: bool = False,
 ) -> str:
     """
     Extrait le texte d'un PDF avec détection de structure et titres.
@@ -200,11 +201,8 @@ def extract_structured_text_from_pdf(
 
     # Assembler et nettoyer
     full_content = "\n".join(markdown_lines)
-    cleaned_content = clean_text(full_content, is_ocr=False)
-
-    # Sauvegarder
-    with open(output_file, "w", encoding="utf-8") as f:
-        f.write(cleaned_content)
+    save_cleaned_markdown(output_file, full_content, is_ocr=is_ocr, profile="default")
+    cleaned_content = output_file.read_text(encoding="utf-8")
 
     if verbose:
         # Compter les titres
@@ -217,7 +215,8 @@ def extract_structured_text_from_pdf(
 def extract_with_pymupdf4llm(
     pdf_path: str,
     output_dir: str = "./OUTPUT",
-    verbose: bool = True
+    verbose: bool = True,
+    is_ocr: bool = False,
 ) -> str:
     """
     Extrait avec pymupdf4llm (bibliothèque spécialisée markdown).
@@ -258,11 +257,8 @@ def extract_with_pymupdf4llm(
     if verbose:
         print(f"  🧹 Nettoyage du texte...")
 
-    cleaned_content = clean_markdown_extraction(md_text, is_ocr=False)
-
-    # Sauvegarder
-    with open(output_file, "w", encoding="utf-8") as f:
-        f.write(cleaned_content)
+    save_cleaned_markdown(output_file, md_text, is_ocr=is_ocr, profile="technical_manual")
+    cleaned_content = output_file.read_text(encoding="utf-8")
 
     if verbose:
         title_count = cleaned_content.count("\n#")

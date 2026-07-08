@@ -1,6 +1,6 @@
 import fitz  # PyMuPDF
 from pathlib import Path
-from src.processors.text_cleaner import clean_text
+from src.processors.text_cleaner import save_cleaned_markdown
 
 
 def extract_text_from_pdf(pdf_path: str, output_dir: str = "./OUTPUT", verbose: bool = True) -> str:
@@ -54,12 +54,8 @@ def extract_text_from_pdf(pdf_path: str, output_dir: str = "./OUTPUT", verbose: 
     # Assembler le contenu
     full_content = ''.join(markdown_content)
 
-    # Nettoyer le texte
-    cleaned_content = clean_text(full_content, is_ocr=False)
-
-    # Sauvegarder en markdown
-    with open(output_file, "w", encoding="utf-8") as f:
-        f.write(cleaned_content)
+    save_cleaned_markdown(output_file, full_content, is_ocr=False, profile="default")
+    cleaned_content = output_file.read_text(encoding="utf-8")
 
     if verbose:
         print(f"  ✅ Sauvegardé: {len(cleaned_content)} caractères")

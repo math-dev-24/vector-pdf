@@ -76,8 +76,34 @@ class Settings(BaseSettings):
     merge_small_chunks: bool = Field(default=True, description="Fusionner les petits chunks")
     min_chunk_quality: float = Field(default=0.5, ge=0.0, le=1.0, description="Score minimum de qualité")
     prioritize_chunks: bool = Field(default=True, description="Prioriser les chunks importants")
-    
-    # ===== Performance =====
+    chunk_merge_strategy: str = Field(
+        default="hybrid",
+        description="Stratégie de fusion des petits chunks: sequential, semantic, hybrid",
+    )
+    use_sentence_window_chunking: bool = Field(
+        default=True,
+        description="Fenêtre de phrases pour manuels de dépannage/procédures",
+    )
+
+    # ===== Enrichissement IA =====
+    enable_ai_enrichment: bool = Field(default=True, description="Enrichissement métadonnées via GPT")
+    ai_enrichment_batch_size: int = Field(
+        default=15, ge=1, le=30, description="Chunks par appel GPT pour l'enrichissement",
+    )
+    enable_boundary_fallback: bool = Field(
+        default=False,
+        description="Fallback LLM pour découpage si structure de sections insuffisante",
+    )
+    boundary_fallback_section_threshold: float = Field(
+        default=0.5, ge=0.0, le=1.0,
+        description="Score structure minimum avant fallback LLM (sections valides / attendues)",
+    )
+
+    # ===== Embedding / retrieval =====
+    embed_with_context: bool = Field(
+        default=True,
+        description="Inclure hiérarchie sectionnelle dans le texte embeddé",
+    )
     max_workers: Optional[int] = Field(default=None, description="Nombre max de workers (None = auto)")
     use_multithreading: bool = Field(default=False, description="Activer multithreading pour extraction PDF")
     enable_async: bool = Field(default=True, description="Utiliser async pour les APIs (expérimental)")

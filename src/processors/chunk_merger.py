@@ -99,22 +99,52 @@ class ChunkMerger:
         Returns:
             Index du meilleur voisin ou None
         """
-        # Stratégie séquentielle : fusionner avec le suivant
-        if self.merge_strategy == "sequential":
+        current_chunk = chunks[current_idx]
+        current_content = current_chunk.get('content', '')
+        current_meta = current_chunk.get('metadata', {})
+        current_hierarchy = current_meta.get('section_hierarchy_string', '')
+
+        candidates: List[int] = []
+
+        if self.merge_strategy in ("sequential", "semantic", "hybrid"):
             if current_idx + 1 < len(chunks):
-                next_chunk = chunks[current_idx + 1]
-                if not next_chunk.get('_processed', False):
-                    # Vérifier que la fusion ne dépasse pas max_chunk_size
-                    current_content = chunks[current_idx].get('content', '')
-                    next_content = next_chunk.get('content', '')
-                    merged_size = len(current_content + '\n\n' + next_content)
-                    if merged_size <= self.max_chunk_size:
-                        return current_idx + 1
-        
-        # TODO: Implémenter stratégie sémantique (utiliser embeddings)
-        # TODO: Implémenter stratégie hybride
-        
-        return None
+                candidates.append(current_idx + 1)
+            if current_idx > 0:
+                candidates.append(current_idx - 1)
+
+        best_idx: Optional[int] = None
+        best_score = -1.0
+
+        for idx in candidates:
+            neighbor = chunks[idx]
+            if neighbor.get('_processed', False):
+                continue
+
+            neighbor_content = neighbor.get('content', '')
+            merged_size = len(current_content + '\n\n' + neighbor_content)
+            if merged_size > self.max_chunk_size:
+                continue
+
+            score = 0.0
+            neighbor_hierarchy = neighbor.get('metadata', {}).get('section_hierarchy_string', '')
+
+            if self.merge_strategy == "sequential":
+                score = 1.0 if idx == current_idx + 1 else 0.5
+            elif self.merge_strategy == "semantic":
+                score = 1.0 if current_hierarchy and current_hierarchy == neighbor_hierarchy else 0.0
+                if idx == current_idx + 1:
+                    score += 0.1
+            else:  # hybrid
+                if current_hierarchy and current_hierarchy == neighbor_hierarchy:
+                    score = 1.0
+                elif idx == current_idx + 1:
+                    score = 0.5
+
+            if score > best_score:
+                best_score = score
+                best_idx = idx
+
+        return best_idx if best_score > 0 else None
     
     def _merge_two_chunks(
         self,
@@ -157,6 +187,10 @@ class ChunkMerger:
             merged_metadata['section_title'] = chunk2['metadata']['section_title']
         if 'section_level' in chunk2['metadata']:
             merged_metadata['section_level'] = chunk2['metadata']['section_level']
+        if chunk2['metadata'].get('section_hierarchy'):
+            merged_metadata['section_hierarchy'] = chunk2['metadata']['section_hierarchy']
+        if chunk2['metadata'].get('section_hierarchy_string'):
+            merged_metadata['section_hierarchy_string'] = chunk2['metadata']['section_hierarchy_string']
         
         return {
             'content': merged_content,
